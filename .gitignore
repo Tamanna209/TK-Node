@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+serviceAccountKey.json
+*.log
+.DS_Store
+Thumbs.db
+# Firebase service account
+fConfig/*.json
+
+fConfig/firebaseServiceAccount.json
+
+index.html
