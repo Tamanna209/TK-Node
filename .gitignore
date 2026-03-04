@@ -11,3 +11,5 @@ fConfig/*.json
 fConfig/firebaseServiceAccount.json
 
 index.html
+
+firebasesdk
