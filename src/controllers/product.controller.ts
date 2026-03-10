@@ -125,3 +125,9 @@ export const listMyProducts = async (req: Request, res: Response): Promise<void>
         sendError(res, 'Failed to fetch seller products', 500);
     }
 };
+
+
+//product by fetch
+const fetchBySlug=async(req :Request, res:Response)=>{
+console.log("Products by slug")
+}

@@ -6,7 +6,7 @@ import './config/firebase';
 
 import app from './app';
 
-const PORT = parseInt(process.env.PORT || '3000', 10);
+const PORT = parseInt(process.env.PORT || '5000', 10);
 
 const server = app.listen(PORT, () => {
     console.log('');
