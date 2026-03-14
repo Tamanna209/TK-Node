@@ -17,11 +17,11 @@ router.get('/', listCategories);
 router.get('/:id', validate(uidParamSchema, 'params'), getCategory);
 
 // admin-only management
-router.post('/', authenticate, requireRole('admin'), validate(createCategorySchema), createCategory);
+router.post('/', authenticate, requireRole('seller'), validate(createCategorySchema), createCategory);
 router.put(
     '/:id',
     authenticate,
-    requireRole('admin'),
+    requireRole('seller'),
     validate(uidParamSchema, 'params'),
     validate(updateCategorySchema),
     updateCategory
@@ -29,7 +29,7 @@ router.put(
 router.delete(
     '/:id',
     authenticate,
-    requireRole('admin'),
+    requireRole('seller'),
     validate(uidParamSchema, 'params'),
     deleteCategory
 );
