@@ -1,63 +1,115 @@
-import { Timestamp } from 'firebase-admin/firestore';
-import * as admin from 'firebase-admin';
+// INDUSTRY-LEVEL PRODUCT & VARIANT TYPES
+
+export interface Image {
+    url: string;
+    publicId: string;
+    altText?: string;
+    order?: number;
+}
+
+export interface VariantPrice {
+    base: number;
+    sale?: number | null;
+    costPrice?: number | null; // not exposed to client
+    saleStartDate?: Date | null;
+    saleEndDate?: Date | null;
+}
 
 export interface VariantInventory {
     quantity: number;
-    lowThreshold: number;
+    lowStockThreshold?: number;
+    trackInventory?: boolean;
+}
+
+export interface VariantAttribute {
+    key: string;
+    value: string;
 }
 
 export interface Variant {
     sku: string;
-    attributes?: Record<string, string>;
-    images?: string[];
+    barcode: number;
+    attributes: VariantAttribute[];
+    images?: Image[];
+    price: VariantPrice;
     inventory: VariantInventory;
+    isActive?: boolean;
+    // Virtuals (for reference):
+    // isSaleActive: boolean;
+    // finalPrice: number;
+    // discountPercentage: number;
 }
 
-export interface ShippingDetails {
-    height: number;
-    length: number;
-    breadth: number;
-    weight: number;
+export interface ProductShipping {
+    weight?: number;
+    dimensions?: {
+        length?: number;
+        width?: number;
+        height?: number;
+    };
 }
 
-export type ProductStatus = 'active' | 'inactive';
+export type ProductStatus = 'draft' | 'active' | 'archived';
 
 export interface Product {
     id: string;
     slug: string;
     sellerUid: string;
     name: string;
-    title?: string;
+    title: string;
     description?: string;
-    brand: string;
+    brand?: string;
     status: ProductStatus;
     category: string;
-    shipping?: ShippingDetails;
-    inventory: {
-        quantity: number;
-        lowThreshold: number;
-    };
-    attributes?: Record<string, string>; // common product attributes
+    shipping?: ProductShipping;
+    attributes?: VariantAttribute[];
     variants: Variant[];
-    createdAt: Timestamp | admin.firestore.FieldValue;
-    updatedAt: Timestamp | admin.firestore.FieldValue;
+    soldInfo?: {
+        enabled: boolean;
+        count: number;
+    };
+    fomo?: {
+        enabled: boolean;
+        type: 'viewing_now' | 'product_left' | 'custom';
+        viewingNow?: number;
+        productLeft?: number;
+        customMessage?: string;
+    };
+    isFeatured?: boolean;
+    createdAt: Date;
+    updatedAt: Date;
+    // Virtuals (for reference):
+    // minPrice: number;
+    // maxPrice: number;
+    // inStock: boolean;
+    // soldLabel: string;
+    // fomoLabel: string;
+    // maxDiscountPercentage: number;
 }
 
-// DTOs used when creating/updating products
+// DTOs for create/update
 export interface CreateProductDTO {
     name: string;
-    title?: string;
+    title: string;
     description?: string;
     brand?: string;
     status?: ProductStatus;
     category: string;
-    shipping?: ShippingDetails;
-    inventory?: {
-        quantity: number;
-        lowThreshold?: number;
-    };
-    attributes?: Record<string, string>;
+    shipping?: ProductShipping;
+    attributes?: VariantAttribute[];
     variants?: Partial<Variant>[];
+    soldInfo?: {
+        enabled?: boolean;
+        count?: number;
+    };
+    fomo?: {
+        enabled?: boolean;
+        type?: 'viewing_now' | 'product_left' | 'custom';
+        viewingNow?: number;
+        productLeft?: number;
+        customMessage?: string;
+    };
+    isFeatured?: boolean;
 }
 
 export interface UpdateProductDTO extends Partial<CreateProductDTO> {}

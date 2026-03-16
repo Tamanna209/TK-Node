@@ -52,43 +52,75 @@ export const uidParamSchema = z.object({
 
 // ─── Product/Category Validation Schemas ─────────────────────────────────────
 
+
+// INDUSTRY-LEVEL PRODUCT VALIDATION
+const attributeSchema = z.object({
+    key: z.string().min(1),
+    value: z.string().min(1)
+});
+
+const imageSchema = z.object({
+    url: z.string().url(),
+    publicId: z.string().min(1),
+    altText: z.string().optional(),
+    order: z.number().optional()
+});
+
+const priceSchema = z.object({
+    base: z.number().nonnegative(),
+    sale: z.number().nonnegative().nullable().optional(),
+    costPrice: z.number().nonnegative().nullable().optional(),
+    saleStartDate: z.coerce.date().nullable().optional(),
+    saleEndDate: z.coerce.date().nullable().optional()
+});
+
+const inventorySchema = z.object({
+    quantity: z.number().nonnegative(),
+    lowStockThreshold: z.number().nonnegative().optional(),
+    trackInventory: z.boolean().optional()
+});
+
+const variantSchema = z.object({
+    sku: z.string().min(1, 'SKU is required'),
+    barcode: z.number(),
+    attributes: z.array(attributeSchema),
+    images: z.array(imageSchema).max(5).optional(),
+    price: priceSchema,
+    inventory: inventorySchema,
+    isActive: z.boolean().optional()
+});
+
+const shippingSchema = z.object({
+    weight: z.number().nonnegative().optional(),
+    dimensions: z.object({
+        length: z.number().nonnegative().optional(),
+        width: z.number().nonnegative().optional(),
+        height: z.number().nonnegative().optional()
+    }).optional()
+}).optional();
+
 export const createProductSchema = z.object({
     name: z.string().min(1, 'Product name is required'),
-    title: z.string().optional(),
+    title: z.string().min(1, 'Product title is required'),
     description: z.string().optional(),
     brand: z.string().optional(),
-    status: z.enum(['active', 'inactive']).optional(),
+    status: z.enum(['draft', 'active', 'archived']).optional(),
     category: z.string().min(1, 'Category is required'),
-    shipping: z
-        .object({
-            height: z.number().nonnegative(),
-            length: z.number().nonnegative(),
-            breadth: z.number().nonnegative(),
-            weight: z.number().nonnegative(),
-        })
-        .optional(),
-    inventory: z
-        .object({
-            quantity: z.number().nonnegative(),
-            lowThreshold: z.number().nonnegative().optional(),
-        })
-        .optional(),
-    attributes: z.record(z.string(), z.string()).optional(),
-    variants: z
-        .array(
-            z.object({
-                sku: z.string().min(1, 'SKU is required'),
-                attributes: z.record(z.string(), z.string()).optional(),
-                images: z.array(z.string()).optional(),
-                inventory: z
-                    .object({
-                        quantity: z.number().nonnegative(),
-                        lowThreshold: z.number().nonnegative().optional(),
-                    })
-                    .optional(),
-            })
-        )
-        .optional(),
+    shipping: shippingSchema,
+    attributes: z.array(attributeSchema).optional(),
+    variants: z.array(variantSchema).optional(),
+    soldInfo: z.object({
+        enabled: z.boolean().optional(),
+        count: z.number().nonnegative().optional()
+    }).optional(),
+    fomo: z.object({
+        enabled: z.boolean().optional(),
+        type: z.enum(['viewing_now', 'product_left', 'custom']).optional(),
+        viewingNow: z.number().nonnegative().optional(),
+        productLeft: z.number().nonnegative().optional(),
+        customMessage: z.string().optional()
+    }).optional(),
+    isFeatured: z.boolean().optional()
 });
 
 export const updateProductSchema = createProductSchema.partial();

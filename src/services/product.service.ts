@@ -12,34 +12,48 @@ import { generateSlug } from '../utils/slug.util';
 
 const PRODUCTS_COLLECTION = 'products';
 
+
 /**
- * Helper to normalise variant data and ensure at least one variant exists.
+ * Normalize variant data and ensure at least one valid variant exists.
+ * Enforces max 5 images per variant and required fields.
  */
-const normalizeVariants = (data: Partial<Variant>[] | undefined, inventory: { quantity: number; lowThreshold: number }) => {
+const normalizeVariants = (data: Partial<Variant>[] | undefined): Variant[] => {
     if (data && data.length > 0) {
-        return data.map((v) => {
+        return data.map((v, idx) => {
+            if (!v.sku) throw new Error(`Variant at index ${idx} missing SKU`);
+            if (!v.barcode) throw new Error(`Variant at index ${idx} missing barcode`);
+            if (!v.price || typeof v.price.base !== 'number') throw new Error(`Variant at index ${idx} missing base price`);
             return {
-                sku: v.sku || uuidv4(),
-                attributes: v.attributes || {},
-                images: v.images || [],
-                inventory: {
-                    quantity: v.inventory?.quantity ?? inventory.quantity,
-                    lowThreshold: v.inventory?.lowThreshold ?? inventory.lowThreshold,
+                sku: v.sku,
+                barcode: v.barcode,
+                attributes: v.attributes || [],
+                images: (v.images || []).slice(0, 5),
+                price: {
+                    base: v.price.base,
+                    sale: v.price.sale ?? null,
+                    costPrice: v.price.costPrice ?? null,
+                    saleStartDate: v.price.saleStartDate ?? null,
+                    saleEndDate: v.price.saleEndDate ?? null,
                 },
-            } as Variant;
+                inventory: {
+                    quantity: v.inventory?.quantity ?? 0,
+                    lowStockThreshold: v.inventory?.lowStockThreshold ?? 5,
+                    trackInventory: v.inventory?.trackInventory ?? true,
+                },
+                isActive: v.isActive ?? true,
+            };
         });
     }
-
-    // default single variant
+    // Default single variant if none provided
     return [
         {
             sku: uuidv4(),
-            attributes: {},
+            barcode: Math.floor(Math.random() * 1e12),
+            attributes: [],
             images: [],
-            inventory: {
-                quantity: inventory.quantity,
-                lowThreshold: inventory.lowThreshold,
-            },
+            price: { base: 0 },
+            inventory: { quantity: 0, lowStockThreshold: 5, trackInventory: true },
+            isActive: true,
         },
     ];
 };
@@ -47,32 +61,38 @@ const normalizeVariants = (data: Partial<Variant>[] | undefined, inventory: { qu
 /**
  * Create a product document for a given seller
  */
+
 export const createProduct = async (
     sellerUid: string,
     data: CreateProductDTO
 ): Promise<Product> => {
-    const now = admin.firestore.FieldValue.serverTimestamp();
-
-    const inventory = {
-        quantity: data.inventory?.quantity ?? 0,
-        lowThreshold: data.inventory?.lowThreshold ?? 5,
-    };
-
+    const now = new Date();
     const slug = generateSlug(data.name);
 
     const productData: Partial<Product> = {
         sellerUid,
         slug,
         name: data.name,
-        title: data.title || '',
+        title: data.title,
         description: data.description || '',
         brand: data.brand || 'Generic',
-        status: data.status || 'inactive',
+        status: data.status || 'draft',
         category: data.category,
         shipping: data.shipping,
-        inventory,
-        attributes: data.attributes || {},
-        variants: normalizeVariants(data.variants, inventory),
+        attributes: data.attributes || [],
+        variants: normalizeVariants(data.variants),
+        soldInfo: {
+            enabled: data.soldInfo?.enabled ?? false,
+            count: data.soldInfo?.count ?? 0
+        },
+        fomo: {
+            enabled: data.fomo?.enabled ?? false,
+            type: data.fomo?.type ?? 'viewing_now',
+            viewingNow: data.fomo?.viewingNow,
+            productLeft: data.fomo?.productLeft,
+            customMessage: data.fomo?.customMessage
+        },
+        isFeatured: data.isFeatured ?? false,
         createdAt: now,
         updatedAt: now,
     };
@@ -85,6 +105,7 @@ export const createProduct = async (
 /**
  * Update an existing product (seller must own it)
  */
+
 export const updateProduct = async (
     productId: string,
     sellerUid: string,
@@ -100,29 +121,19 @@ export const updateProduct = async (
         throw new Error('Not authorized to modify this product');
     }
 
-    const now = admin.firestore.FieldValue.serverTimestamp();
-
+    const now = new Date();
     const updateData: any = { ...data, updatedAt: now };
     if (data.name && data.name !== prod.name) {
         updateData.slug = generateSlug(data.name);
     }
-
-    // if inventory or variants changed we might want to normalise again
-    if (data.inventory) {
-        updateData.inventory = {
-            quantity: data.inventory.quantity,
-            lowThreshold: data.inventory.lowThreshold ?? prod.inventory.lowThreshold,
-        };
-    }
     if (data.variants) {
-        updateData.variants = normalizeVariants(data.variants, {
-            quantity: updateData.inventory?.quantity ?? prod.inventory.quantity,
-            lowThreshold: updateData.inventory?.lowThreshold ?? prod.inventory.lowThreshold,
-        });
+        updateData.variants = normalizeVariants(data.variants);
+    }
+    if (data.attributes) {
+        updateData.attributes = data.attributes;
     }
 
     await docRef.update(updateData);
-
     const updatedSnap = await docRef.get();
     return { id: updatedSnap.id, ...updatedSnap.data() } as Product;
 };
