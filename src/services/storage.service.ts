@@ -1,4 +1,4 @@
-import { storage } from '../config/firebase';
+import { bucket } from '../config/firebase';
 import { v4 as uuidv4 } from 'uuid';
 
 /**
@@ -13,7 +13,7 @@ export const uploadFile = async (
     mimeType: string,
     destinationPath: string
 ): Promise<string> => {
-    const file = storage.file(destinationPath);
+    const file = bucket.file(destinationPath);
 
     const token = uuidv4();
 
@@ -30,7 +30,7 @@ export const uploadFile = async (
     // Make file publicly accessible
     await file.makePublic();
 
-    const publicUrl = `https://storage.googleapis.com/${storage.name}/${destinationPath}`;
+    const publicUrl = `https://storage.googleapis.com/${bucket.name}/${destinationPath}`;
     return publicUrl;
 };
 
@@ -40,7 +40,7 @@ export const uploadFile = async (
  */
 export const deleteFile = async (destinationPath: string): Promise<void> => {
     try {
-        const file = storage.file(destinationPath);
+        const file = bucket.file(destinationPath);
         await file.delete();
     } catch (error) {
         // File may not exist, ignore error

@@ -1,133 +1,523 @@
+// import { Request, Response } from 'express';
+// import * as productService from '../services/product.service';
+// import { sendSuccess, sendError } from '../utils/response.util';
+// import { Product, CreateProductDTO, UpdateProductDTO } from '../types/product.types';
+
+// /**
+//  * POST /api/products
+//  * Create a new product (seller must be authenticated & approved)
+//  */
+// export const createProduct = async (req: Request, res: Response): Promise<void> => {
+//     try {
+//         if (!req.user) {
+//             sendError(res, 'Unauthorized', 401);
+//             return;
+//         }
+//         const sellerUid = req.user.uid;
+//         const data = req.body as CreateProductDTO;
+//         const product = await productService.createProduct(sellerUid, data);
+//         sendSuccess(res, { product }, 'Product created', 201);
+//     } catch (error) {
+//         const err = error as Error;
+//         console.error('createProduct error:', err.message);
+//         sendError(res, err.message || 'Failed to create product', 500);
+//     }
+// };
+
+// /**
+//  * PUT /api/products/:id
+//  * Update a product (seller owns it)
+//  */
+// export const updateProduct = async (req: Request, res: Response): Promise<void> => {
+//     try {
+//         if (!req.user) {
+//             sendError(res, 'Unauthorized', 401);
+//             return;
+//         }
+//         const sellerUid = req.user.uid;
+//         const id = req.params['id'] as string;
+//         const data = req.body as UpdateProductDTO;
+//         const updated = await productService.updateProduct(id, sellerUid, data);
+//         sendSuccess(res, { product: updated }, 'Product updated');
+//     } catch (error) {
+//         const err = error as Error;
+//         console.error('updateProduct error:', err.message);
+//         sendError(res, err.message || 'Failed to update product', 500);
+//     }
+// };
+
+// /**
+//  * DELETE /api/products/:id
+//  * Remove a product
+//  */
+// export const deleteProduct = async (req: Request, res: Response): Promise<void> => {
+//     try {
+//         if (!req.user) {
+//             sendError(res, 'Unauthorized', 401);
+//             return;
+//         }
+//         const sellerUid = req.user.uid;
+//         const id = req.params['id'] as string;
+//         await productService.deleteProduct(id, sellerUid);
+//         sendSuccess(res, { id }, 'Product deleted');
+//     } catch (error) {
+//         const err = error as Error;
+//         console.error('deleteProduct error:', err.message);
+//         sendError(res, err.message || 'Failed to delete product', 500);
+//     }
+// };
+
+// /**
+//  * GET /api/products
+//  * List public (active) products
+//  */
+// export const listProducts = async (_req: Request, res: Response): Promise<void> => {
+//     try {
+//         const products = await productService.listPublicProducts();
+//         sendSuccess(res, { products, total: products.length }, 'Products fetched');
+//     } catch (error) {
+//         const err = error as Error;
+//         console.error('listProducts error:', err.message);
+//         sendError(res, 'Failed to fetch products', 500);
+//     }
+// };
+
+// /**
+//  * GET /api/products/:id
+//  * Get details of a single product (active or owner)
+//  */
+// export const getProduct = async (req: Request, res: Response): Promise<void> => {
+//     try {
+//         const identifier = req.params['id'] as string;
+//         // try slug first, then id
+//         let product = await productService.getProductBySlug(identifier);
+//         if (!product) {
+//             product = await productService.getProductById(identifier);
+//         }
+//         if (!product || product.status !== 'active') {
+//             sendError(res, 'Product not found', 404);
+//             return;
+//         }
+//         sendSuccess(res, { product }, 'Product fetched');
+//     } catch (error) {
+//         const err = error as Error;
+//         console.error('getProduct error:', err.message);
+//         sendError(res, 'Failed to fetch product', 500);
+//     }
+// };
+
+// /**
+//  * GET /api/products/seller/me
+//  * Get all products belonging to current seller
+//  */
+// export const listMyProducts = async (req: Request, res: Response): Promise<void> => {
+//     try {
+//         if (!req.user) {
+//             sendError(res, 'Unauthorized', 401);
+//             return;
+//         }
+//         const sellerUid = req.user.uid;
+//         const products = await productService.listProductsBySeller(sellerUid);
+//         sendSuccess(res, { products, total: products.length }, 'Seller products fetched');
+//     } catch (error) {
+//         const err = error as Error;
+//         console.error('listMyProducts error:', err.message);
+//         sendError(res, 'Failed to fetch seller products', 500);
+//     }
+// };
+
+
+// //product by fetch
+// const fetchBySlug=async(req :Request, res:Response)=>{
+// console.log("Products by slug")
+// }
+
 import { Request, Response } from 'express';
 import * as productService from '../services/product.service';
 import { sendSuccess, sendError } from '../utils/response.util';
-import { Product, CreateProductDTO, UpdateProductDTO } from '../types/product.types';
+import { bucket } from '../config/firebase';
 
 /**
- * POST /api/products
- * Create a new product (seller must be authenticated & approved)
+ * 🔥 Upload Image
  */
-export const createProduct = async (req: Request, res: Response): Promise<void> => {
+const uploadToFirebase = async (
+    file: Express.Multer.File,
+    productSlug: string,
+    variantSku: string,
+    index: number
+) => {
+    const ext = file.originalname.split('.').pop();
+
+    const fileName = `products/${productSlug}/${variantSku}_${Date.now()}_${index}.${ext}`;
+    const fileUpload = bucket.file(fileName);
+
+    await fileUpload.save(file.buffer, {
+        metadata: { contentType: file.mimetype },
+    });
+
+    await fileUpload.makePublic();
+
+    return {
+        url: `https://storage.googleapis.com/${bucket.name}/${fileName}`,
+        publicId: fileName,
+    };
+};
+
+/**
+ * 🔥 Delete Image
+ */
+const deleteFromFirebase = async (publicId: string) => {
     try {
-        if (!req.user) {
-            sendError(res, 'Unauthorized', 401);
-            return;
+        await bucket.file(publicId).delete();
+    } catch {}
+};
+
+/**
+ * 🔥 Parse variants
+ */
+const parseVariants = (data: any) => {
+    if (typeof data.variants === 'string') {
+        data.variants = JSON.parse(data.variants);
+    }
+    return data;
+};
+
+/**
+ * 🔥 Attach Images
+ */
+const attachImages = async (
+    req: Request,
+    productSlug: string,
+    variants: any[]
+) => {
+    const files = (req.files || []) as Express.Multer.File[];
+
+    return Promise.all(
+        variants.map(async (variant, i) => {
+            const variantFiles = files.filter(
+                (f) => f.fieldname === `variantImages_${i}`
+            );
+
+            let images = [];
+
+            for (let j = 0; j < Math.min(variantFiles.length, 5); j++) {
+                const uploaded = await uploadToFirebase(
+                    variantFiles[j],
+                    productSlug,
+                    variant.sku || `temp_${i}`,
+                    j
+                );
+                images.push({ ...uploaded, order: j });
+            }
+
+            return {
+                ...variant,
+                images: images.length ? images : variant.images || [],
+            };
+        })
+    );
+};
+
+//////////////////////////////////////////////////////////////
+// 🔥 CREATE PRODUCT
+//////////////////////////////////////////////////////////////
+export const createProduct = async (req: Request, res: Response) => {
+    try {
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        let data: any = parseVariants(req.body);
+
+        const slug = data.name.toLowerCase().replace(/\s+/g, '-');
+
+        if (data.variants) {
+            data.variants = await attachImages(req, slug, data.variants);
         }
-        const sellerUid = req.user.uid;
-        const data = req.body as CreateProductDTO;
-        const product = await productService.createProduct(sellerUid, data);
+
+        const product = await productService.createProduct(
+            req.user.uid,
+            data
+        );
+
         sendSuccess(res, { product }, 'Product created', 201);
-    } catch (error) {
-        const err = error as Error;
-        console.error('createProduct error:', err.message);
-        sendError(res, err.message || 'Failed to create product', 500);
+    } catch (err) {
+        sendError(res, (err as Error).message);
     }
 };
 
-/**
- * PUT /api/products/:id
- * Update a product (seller owns it)
- */
-export const updateProduct = async (req: Request, res: Response): Promise<void> => {
+//////////////////////////////////////////////////////////////
+// 🔥 UPDATE PRODUCT + PARTIAL VARIANT UPDATE
+//////////////////////////////////////////////////////////////
+export const updateProduct = async (req: Request, res: Response) => {
     try {
-        if (!req.user) {
-            sendError(res, 'Unauthorized', 401);
-            return;
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        const id = req.params.id as string;
+
+        const existing = await productService.getProductById(id);
+        if (!existing) return sendError(res, 'Not found', 404);
+
+        let data: any = parseVariants(req.body);
+
+        // 🔥 HANDLE VARIANT IMAGE UPDATE + DELETE OLD
+        if (data.variants) {
+            const updatedVariants = await attachImages(
+                req,
+                existing.slug,
+                data.variants
+            );
+
+            // delete old images if replaced
+            for (const newVar of updatedVariants) {
+                const oldVar = existing.variants.find(v => v.sku === newVar.sku);
+
+                if (oldVar && newVar.images?.length) {
+                    for (const img of oldVar.images || []) {
+                        await deleteFromFirebase(img.publicId);
+                    }
+                }
+            }
+
+            data.variants = updatedVariants;
         }
-        const sellerUid = req.user.uid;
-        const id = req.params['id'] as string;
-        const data = req.body as UpdateProductDTO;
-        const updated = await productService.updateProduct(id, sellerUid, data);
-        sendSuccess(res, { product: updated }, 'Product updated');
-    } catch (error) {
-        const err = error as Error;
-        console.error('updateProduct error:', err.message);
-        sendError(res, err.message || 'Failed to update product', 500);
+
+        const product = await productService.updateProduct(
+            id,
+            req.user.uid,
+            data
+        );
+
+        sendSuccess(res, { product }, 'Product updated');
+    } catch (err) {
+        sendError(res, (err as Error).message);
     }
 };
 
-/**
- * DELETE /api/products/:id
- * Remove a product
- */
-export const deleteProduct = async (req: Request, res: Response): Promise<void> => {
+//////////////////////////////////////////////////////////////
+// 🔥 ADD VARIANT
+//////////////////////////////////////////////////////////////
+export const addVariant = async (req: Request, res: Response) => {
     try {
-        if (!req.user) {
-            sendError(res, 'Unauthorized', 401);
-            return;
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        const id = req.params.id as string;
+
+        const product = await productService.getProductById(id);
+        if (!product) return sendError(res, 'Not found', 404);
+
+        let variant: any = req.body;
+
+        const [newVariant] = await attachImages(req, product.slug, [variant]);
+
+        const updated = await productService.addVariant(
+            id,
+            req.user.uid,
+            newVariant
+        );
+
+        sendSuccess(res, { product: updated }, 'Variant added');
+    } catch (err) {
+        sendError(res, (err as Error).message);
+    }
+};
+
+//////////////////////////////////////////////////////////////
+// 🔥 UPDATE VARIANT
+//////////////////////////////////////////////////////////////
+export const updateVariant = async (req: Request, res: Response) => {
+    try {
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        // ✅ FIXED
+        const id = req.params.id as string;
+        const sku = req.params.sku as string;
+
+        const product = await productService.getProductById(id);
+        if (!product) return sendError(res, 'Not found', 404);
+
+        let data: any = req.body;
+
+        const [updatedVariant] = await attachImages(
+            req,
+            product.slug,
+            [{ ...data, sku }]
+        );
+
+        // delete old images
+        const old = product.variants.find(v => v.sku === sku);
+        if (old && updatedVariant.images?.length) {
+            for (const img of old.images || []) {
+                await deleteFromFirebase(img.publicId);
+            }
         }
-        const sellerUid = req.user.uid;
-        const id = req.params['id'] as string;
-        await productService.deleteProduct(id, sellerUid);
-        sendSuccess(res, { id }, 'Product deleted');
-    } catch (error) {
-        const err = error as Error;
-        console.error('deleteProduct error:', err.message);
-        sendError(res, err.message || 'Failed to delete product', 500);
+
+        const updated = await productService.updateVariant(
+            id,
+            req.user.uid,
+            sku,
+            updatedVariant
+        );
+
+        sendSuccess(res, { product: updated }, 'Variant updated');
+    } catch (err) {
+        sendError(res, (err as Error).message);
     }
 };
 
-/**
- * GET /api/products
- * List public (active) products
- */
-export const listProducts = async (_req: Request, res: Response): Promise<void> => {
+
+//////////////////////////////////////////////////////////////
+// 🔥 DELETE VARIANT
+//////////////////////////////////////////////////////////////
+export const deleteVariant = async (req: Request, res: Response) => {
     try {
-        const products = await productService.listPublicProducts();
-        sendSuccess(res, { products, total: products.length }, 'Products fetched');
-    } catch (error) {
-        const err = error as Error;
-        console.error('listProducts error:', err.message);
-        sendError(res, 'Failed to fetch products', 500);
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        // ✅ FIXED
+        const id = req.params.id as string;
+        const sku = req.params.sku as string;
+
+        const product = await productService.getProductById(id);
+        if (!product) return sendError(res, 'Not found', 404);
+
+        const variant = product.variants.find(v => v.sku === sku);
+
+        if (variant) {
+            for (const img of variant.images || []) {
+                await deleteFromFirebase(img.publicId);
+            }
+        }
+
+        const updated = await productService.deleteVariant(
+            id,
+            req.user.uid,
+            sku
+        );
+
+        sendSuccess(res, { product: updated }, 'Variant deleted');
+    } catch (err) {
+        sendError(res, (err as Error).message);
     }
 };
 
-/**
- * GET /api/products/:id
- * Get details of a single product (active or owner)
- */
-export const getProduct = async (req: Request, res: Response): Promise<void> => {
+
+//////////////////////////////////////////////////////////////
+// 🔥 SOFT DELETE
+//////////////////////////////////////////////////////////////
+export const archiveProduct = async (req: Request, res: Response) => {
     try {
-        const identifier = req.params['id'] as string;
-        // try slug first, then id
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        const id = req.params.id as string;
+
+        const product = await productService.updateProduct(
+            id,
+            req.user.uid,
+            { status: 'archived' }
+        );
+
+        sendSuccess(res, { product }, 'Product archived');
+    } catch (err) {
+        sendError(res, (err as Error).message);
+    }
+};
+
+//////////////////////////////////////////////////////////////
+// 🔥 RESTORE PRODUCT
+//////////////////////////////////////////////////////////////
+export const restoreProduct = async (req: Request, res: Response) => {
+    try {
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        const id = req.params.id as string;
+
+        const product = await productService.updateProduct(
+            id,
+            req.user.uid,
+            { status: 'active' }
+        );
+
+        sendSuccess(res, { product }, 'Product restored');
+    } catch (err) {
+        sendError(res, (err as Error).message);
+    }
+};
+
+//////////////////////////////////////////////////////////////
+// 🔥 HARD DELETE
+//////////////////////////////////////////////////////////////
+export const deleteProduct = async (req: Request, res: Response) => {
+    try {
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
+
+        const id = req.params.id as string;
+
+        const product = await productService.getProductById(id);
+        if (!product) return sendError(res, 'Not found', 404);
+
+        // delete all images
+        for (const v of product.variants) {
+            for (const img of v.images || []) {
+                await deleteFromFirebase(img.publicId);
+            }
+        }
+
+        await productService.deleteProduct(id, req.user.uid);
+
+        sendSuccess(res, {}, 'Product permanently deleted');
+    } catch {
+        sendError(res, 'Delete failed');
+    }
+};
+
+//////////////////////////////////////////////////////////////
+// 🔥 GET PRODUCT
+//////////////////////////////////////////////////////////////
+export const getProduct = async (req: Request, res: Response) => {
+    try {
+        const identifier = req.params.id as string;
+
         let product = await productService.getProductBySlug(identifier);
+
         if (!product) {
             product = await productService.getProductById(identifier);
         }
-        if (!product || product.status !== 'active') {
-            sendError(res, 'Product not found', 404);
-            return;
+
+        if (!product) return sendError(res, 'Not found', 404);
+
+        if (product.status !== 'active' && product.sellerUid !== req.user?.uid) {
+            return sendError(res, 'Not found', 404);
         }
-        sendSuccess(res, { product }, 'Product fetched');
-    } catch (error) {
-        const err = error as Error;
-        console.error('getProduct error:', err.message);
-        sendError(res, 'Failed to fetch product', 500);
+
+        sendSuccess(res, { product });
+    } catch {
+        sendError(res, 'Error fetching product');
     }
 };
 
-/**
- * GET /api/products/seller/me
- * Get all products belonging to current seller
- */
-export const listMyProducts = async (req: Request, res: Response): Promise<void> => {
+//////////////////////////////////////////////////////////////
+// 🔥 LIST PUBLIC PRODUCTS
+//////////////////////////////////////////////////////////////
+export const listProducts = async (_req: Request, res: Response) => {
     try {
-        if (!req.user) {
-            sendError(res, 'Unauthorized', 401);
-            return;
-        }
-        const sellerUid = req.user.uid;
-        const products = await productService.listProductsBySeller(sellerUid);
-        sendSuccess(res, { products, total: products.length }, 'Seller products fetched');
-    } catch (error) {
-        const err = error as Error;
-        console.error('listMyProducts error:', err.message);
-        sendError(res, 'Failed to fetch seller products', 500);
+        const products = await productService.listPublicProducts();
+        sendSuccess(res, { products });
+    } catch {
+        sendError(res, 'Error');
     }
 };
 
+//////////////////////////////////////////////////////////////
+// 🔥 SELLER PRODUCTS
+//////////////////////////////////////////////////////////////
+export const listMyProducts = async (req: Request, res: Response) => {
+    try {
+        if (!req.user) return sendError(res, 'Unauthorized', 401);
 
-//product by fetch
-const fetchBySlug=async(req :Request, res:Response)=>{
-console.log("Products by slug")
-}
+        const products = await productService.listProductsBySeller(
+            req.user.uid
+        );
+
+        sendSuccess(res, { products });
+    } catch {
+        sendError(res, 'Error');
+    }
+};
