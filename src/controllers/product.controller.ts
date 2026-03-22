@@ -173,17 +173,26 @@ const deleteFromFirebase = async (publicId: string) => {
 };
 
 /**
- * 🔥 Parse variants
+ * 🔥 Parse variants + other JSON fields (IMPORTANT FIX)
  */
-const parseVariants = (data: any) => {
-    if (typeof data.variants === 'string') {
-        data.variants = JSON.parse(data.variants);
+const parseBody = (data: any) => {
+    const fields = ['variants', 'shipping', 'attributes', 'soldInfo', 'fomo'];
+
+    for (const field of fields) {
+        if (typeof data[field] === 'string') {
+            try {
+                data[field] = JSON.parse(data[field]);
+            } catch {
+                throw new Error(`Invalid JSON in ${field}`);
+            }
+        }
     }
+
     return data;
 };
 
 /**
- * 🔥 Attach Images
+ * 🔥 Attach Images to Variants
  */
 const attachImages = async (
     req: Request,
@@ -207,6 +216,7 @@ const attachImages = async (
                     variant.sku || `temp_${i}`,
                     j
                 );
+
                 images.push({ ...uploaded, order: j });
             }
 
@@ -225,12 +235,13 @@ export const createProduct = async (req: Request, res: Response) => {
     try {
         if (!req.user) return sendError(res, 'Unauthorized', 401);
 
-        let data: any = parseVariants(req.body);
+        let data: any = parseBody(req.body);
 
-        const slug = data.name.toLowerCase().replace(/\s+/g, '-');
+        // slug only for image folder (actual slug backend generate karega)
+        const tempSlug = data.name.toLowerCase().replace(/\s+/g, '-');
 
         if (data.variants) {
-            data.variants = await attachImages(req, slug, data.variants);
+            data.variants = await attachImages(req, tempSlug, data.variants);
         }
 
         const product = await productService.createProduct(
@@ -245,7 +256,7 @@ export const createProduct = async (req: Request, res: Response) => {
 };
 
 //////////////////////////////////////////////////////////////
-// 🔥 UPDATE PRODUCT + PARTIAL VARIANT UPDATE
+// 🔥 UPDATE PRODUCT + VARIANT IMAGE HANDLING
 //////////////////////////////////////////////////////////////
 export const updateProduct = async (req: Request, res: Response) => {
     try {
@@ -256,9 +267,8 @@ export const updateProduct = async (req: Request, res: Response) => {
         const existing = await productService.getProductById(id);
         if (!existing) return sendError(res, 'Not found', 404);
 
-        let data: any = parseVariants(req.body);
+        let data: any = parseBody(req.body);
 
-        // 🔥 HANDLE VARIANT IMAGE UPDATE + DELETE OLD
         if (data.variants) {
             const updatedVariants = await attachImages(
                 req,
@@ -266,9 +276,11 @@ export const updateProduct = async (req: Request, res: Response) => {
                 data.variants
             );
 
-            // delete old images if replaced
+            // 🔥 DELETE OLD IMAGES (only if replaced)
             for (const newVar of updatedVariants) {
-                const oldVar = existing.variants.find(v => v.sku === newVar.sku);
+                const oldVar = existing.variants.find(
+                    (v) => v.sku === newVar.sku
+                );
 
                 if (oldVar && newVar.images?.length) {
                     for (const img of oldVar.images || []) {
@@ -304,7 +316,7 @@ export const addVariant = async (req: Request, res: Response) => {
         const product = await productService.getProductById(id);
         if (!product) return sendError(res, 'Not found', 404);
 
-        let variant: any = req.body;
+        let variant: any = parseBody(req.body);
 
         const [newVariant] = await attachImages(req, product.slug, [variant]);
 
@@ -327,14 +339,13 @@ export const updateVariant = async (req: Request, res: Response) => {
     try {
         if (!req.user) return sendError(res, 'Unauthorized', 401);
 
-        // ✅ FIXED
         const id = req.params.id as string;
         const sku = req.params.sku as string;
 
         const product = await productService.getProductById(id);
         if (!product) return sendError(res, 'Not found', 404);
 
-        let data: any = req.body;
+        let data: any = parseBody(req.body);
 
         const [updatedVariant] = await attachImages(
             req,
@@ -342,8 +353,8 @@ export const updateVariant = async (req: Request, res: Response) => {
             [{ ...data, sku }]
         );
 
-        // delete old images
-        const old = product.variants.find(v => v.sku === sku);
+        // 🔥 DELETE OLD IMAGES
+        const old = product.variants.find((v) => v.sku === sku);
         if (old && updatedVariant.images?.length) {
             for (const img of old.images || []) {
                 await deleteFromFirebase(img.publicId);
@@ -363,7 +374,6 @@ export const updateVariant = async (req: Request, res: Response) => {
     }
 };
 
-
 //////////////////////////////////////////////////////////////
 // 🔥 DELETE VARIANT
 //////////////////////////////////////////////////////////////
@@ -371,14 +381,13 @@ export const deleteVariant = async (req: Request, res: Response) => {
     try {
         if (!req.user) return sendError(res, 'Unauthorized', 401);
 
-        // ✅ FIXED
         const id = req.params.id as string;
         const sku = req.params.sku as string;
 
         const product = await productService.getProductById(id);
         if (!product) return sendError(res, 'Not found', 404);
 
-        const variant = product.variants.find(v => v.sku === sku);
+        const variant = product.variants.find((v) => v.sku === sku);
 
         if (variant) {
             for (const img of variant.images || []) {
@@ -397,7 +406,6 @@ export const deleteVariant = async (req: Request, res: Response) => {
         sendError(res, (err as Error).message);
     }
 };
-
 
 //////////////////////////////////////////////////////////////
 // 🔥 SOFT DELETE
@@ -453,7 +461,6 @@ export const deleteProduct = async (req: Request, res: Response) => {
         const product = await productService.getProductById(id);
         if (!product) return sendError(res, 'Not found', 404);
 
-        // delete all images
         for (const v of product.variants) {
             for (const img of v.images || []) {
                 await deleteFromFirebase(img.publicId);
@@ -494,7 +501,7 @@ export const getProduct = async (req: Request, res: Response) => {
 };
 
 //////////////////////////////////////////////////////////////
-// 🔥 LIST PUBLIC PRODUCTS
+// 🔥 LIST PRODUCTS
 //////////////////////////////////////////////////////////////
 export const listProducts = async (_req: Request, res: Response) => {
     try {

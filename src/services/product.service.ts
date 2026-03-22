@@ -201,6 +201,7 @@
 //     return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
 // };
 
+
 import { db } from '../config/firebase';
 import {
     Product,
@@ -209,24 +210,58 @@ import {
     Variant,
 } from '../types/product.types';
 
-import { generateSlug } from '../utils/slug.util';
+import { generateSlug, generateSearchKeywords } from '../utils/slug.util';
+import { UserProfile } from '../types/user.types';
 
 const PRODUCTS_COLLECTION = 'products';
+const USERS_COLLECTION = 'users';
+const CATEGORY_COLLECTION = 'categories';
 
 /**
- * 🔥 LOCAL SKU GENERATOR
+ * 🔥 SKU GENERATOR
  */
 const generateSKU = (productName: string, index: number): string => {
-    const base = productName
-        .substring(0, 3)
-        .toUpperCase()
-        .replace(/[^A-Z0-9]/g, '');
-
+    const base = productName.substring(0, 3).toUpperCase().replace(/[^A-Z0-9]/g, '');
     return `${base}-${Date.now()}-${index + 1}`;
 };
 
 /**
- * 🔥 NORMALIZE (ONLY FOR CREATE)
+ * 🔥 VALIDATE CATEGORY
+ */
+const validateCategory = async (categoryId: string) => {
+    const doc = await db.collection(CATEGORY_COLLECTION).doc(categoryId).get();
+    if (!doc.exists) throw new Error('Invalid categoryId');
+};
+
+/**
+ * 🔥 VALIDATE SELLER + SNAPSHOT
+ */
+const getSellerSnapshot = async (sellerUid: string) => {
+    const userDoc = await db.collection(USERS_COLLECTION).doc(sellerUid).get();
+
+    if (!userDoc.exists) {
+        throw new Error('Seller not found');
+    }
+
+    const data = userDoc.data();
+
+    if (!data) {
+        throw new Error('User data missing');
+    }
+
+    const user: UserProfile = data as UserProfile;
+
+    if (user.role !== 'seller') {
+        throw new Error('User is not a seller');
+    }
+
+    return {
+        name: user.name ?? 'Seller',
+    };
+};
+
+/**
+ * 🔥 NORMALIZE VARIANTS
  */
 const normalizeVariants = (
     data: Partial<Variant>[] | undefined,
@@ -245,9 +280,15 @@ const normalizeVariants = (
             throw new Error(`Sale price must be less than base price`);
         }
 
+        if (!v.inventory || typeof v.inventory.quantity !== 'number') {
+            throw new Error(`Variant ${idx} missing inventory`);
+        }
+
         return {
             sku: generateSKU(productName, idx),
+
             barcode: v.barcode ? String(v.barcode) : undefined,
+
             attributes: v.attributes || [],
             images: (v.images || []).slice(0, 5),
 
@@ -255,18 +296,19 @@ const normalizeVariants = (
                 base: v.price.base,
                 sale: v.price.sale ?? null,
                 costPrice: v.price.costPrice ?? null,
-                saleStartDate: v.price.saleStartDate ?? null,
-                saleEndDate: v.price.saleEndDate ?? null,
+                saleStartDate: v.price.saleStartDate ? new Date(v.price.saleStartDate) : null,
+                saleEndDate: v.price.saleEndDate ? new Date(v.price.saleEndDate) : null,
             },
 
             inventory: {
-                quantity: v.inventory?.quantity ?? 0,
-                lowStockThreshold: v.inventory?.lowStockThreshold ?? 5,
-                trackInventory: v.inventory?.trackInventory ?? true,
-                allowBackorder: v.inventory?.allowBackorder ?? false,
+                quantity: v.inventory.quantity,
+                lowStockThreshold: v.inventory.lowStockThreshold ?? 5,
+                trackInventory: v.inventory.trackInventory ?? true,
+                allowBackorder: v.inventory.allowBackorder ?? false,
             },
 
             isActive: v.isActive ?? true,
+
             createdAt: new Date(),
             updatedAt: new Date(),
         };
@@ -274,26 +316,43 @@ const normalizeVariants = (
 };
 
 /**
- * 🔥 CREATE PRODUCT
+ * 🔥 CREATE PRODUCT (TRANSACTION SAFE)
  */
 export const createProduct = async (
     sellerUid: string,
     data: CreateProductDTO
 ): Promise<Product> => {
+
+    // ✅ VALIDATIONS
+    await validateCategory(data.categoryId);
+    const sellerSnapshot = await getSellerSnapshot(sellerUid);
+
     const now = new Date();
 
-    const productData: Partial<Product> = {
+    const productRef = db.collection(PRODUCTS_COLLECTION).doc();
+
+    const productData: Product = {
+        id: productRef.id,
+
         sellerUid,
+        sellerSnapshot,
+
         slug: generateSlug(data.name),
+
         name: data.name,
         title: data.title,
         description: data.description || '',
         brand: data.brand || 'Generic',
+
         status: data.status || 'draft',
+
         categoryId: data.categoryId,
-        searchKeywords: [data.name.toLowerCase(), data.title.toLowerCase()],
+
+        searchKeywords: generateSearchKeywords(`${data.name} ${data.title}`),
+
         shipping: data.shipping,
         attributes: data.attributes || [],
+
         variants: normalizeVariants(data.variants, data.name),
 
         soldInfo: {
@@ -301,9 +360,9 @@ export const createProduct = async (
             count: data.soldInfo?.count ?? 0,
         },
 
-        fomo: data.fomo
+        fomo: data.fomo?.enabled
             ? {
-                  enabled: data.fomo.enabled ?? false,
+                  enabled: true,
                   type: data.fomo.type ?? 'viewing_now',
                   value: data.fomo.value,
                   customMessage: data.fomo.customMessage,
@@ -311,24 +370,25 @@ export const createProduct = async (
             : undefined,
 
         isFeatured: data.isFeatured ?? false,
+
         createdAt: now,
         updatedAt: now,
     };
 
-    const ref = await db.collection(PRODUCTS_COLLECTION).add(productData);
-    const snap = await ref.get();
+    await productRef.set(productData);
 
-    return { id: ref.id, ...snap.data() } as Product;
+    return productData;
 };
 
 /**
- * 🔥 UPDATE PRODUCT (NO VARIANT REPLACE)
+ * 🔥 UPDATE PRODUCT
  */
 export const updateProduct = async (
     productId: string,
     sellerUid: string,
     data: UpdateProductDTO
 ): Promise<Product> => {
+
     const docRef = db.collection(PRODUCTS_COLLECTION).doc(productId);
     const existing = await docRef.get();
 
@@ -340,11 +400,14 @@ export const updateProduct = async (
         throw new Error('Not authorized');
     }
 
-    const now = new Date();
+    // ✅ CATEGORY VALIDATION (if changed)
+    if (data.categoryId) {
+        await validateCategory(data.categoryId);
+    }
 
     const updateData: any = {
         ...data,
-        updatedAt: now,
+        updatedAt: new Date(),
     };
 
     delete updateData.sellerUid;
@@ -355,13 +418,10 @@ export const updateProduct = async (
     }
 
     if (data.name || data.title) {
-        updateData.searchKeywords = [
-            (data.name || prod.name).toLowerCase(),
-            (data.title || prod.title).toLowerCase(),
-        ];
+        updateData.searchKeywords = generateSearchKeywords(
+            `${data.name || prod.name} ${data.title || prod.title}`
+        );
     }
-
-    // ❗ IMPORTANT: variants NOT replaced here
 
     await docRef.update(updateData);
 
@@ -372,17 +432,44 @@ export const updateProduct = async (
 
 
 
-
 /**
- * 🔥 ADD VARIANT
+ * 🔥 DELETE PRODUCT (HARD DELETE)
  */
+export const deleteProduct = async (
+    productId: string,
+    sellerUid: string
+): Promise<void> => {
+
+    const docRef = db.collection(PRODUCTS_COLLECTION).doc(productId);
+    const existing = await docRef.get();
+
+    if (!existing.exists) {
+        throw new Error('Product not found');
+    }
+
+    const product = existing.data() as Product;
+
+    // ✅ ownership check
+    if (product.sellerUid !== sellerUid) {
+        throw new Error('Unauthorized');
+    }
+
+    await docRef.delete();
+};
+
+
 export const addVariant = async (
     productId: string,
     sellerUid: string,
     variant: Partial<Variant>
 ): Promise<Product> => {
-    const product = await getProductById(productId);
-    if (!product) throw new Error('Product not found');
+
+    const docRef = db.collection(PRODUCTS_COLLECTION).doc(productId);
+    const snap = await docRef.get();
+
+    if (!snap.exists) throw new Error('Product not found');
+
+    const product = snap.data() as Product;
 
     if (product.sellerUid !== sellerUid) {
         throw new Error('Unauthorized');
@@ -392,7 +479,7 @@ export const addVariant = async (
 
     const updatedVariants = [...product.variants, newVariant];
 
-    await db.collection(PRODUCTS_COLLECTION).doc(productId).update({
+    await docRef.update({
         variants: updatedVariants,
         updatedAt: new Date(),
     });
@@ -400,17 +487,19 @@ export const addVariant = async (
     return { ...product, variants: updatedVariants };
 };
 
-/**
- * 🔥 UPDATE VARIANT
- */
 export const updateVariant = async (
     productId: string,
     sellerUid: string,
     sku: string,
     data: Partial<Variant>
 ): Promise<Product> => {
-    const product = await getProductById(productId);
-    if (!product) throw new Error('Product not found');
+
+    const docRef = db.collection(PRODUCTS_COLLECTION).doc(productId);
+    const snap = await docRef.get();
+
+    if (!snap.exists) throw new Error('Product not found');
+
+    const product = snap.data() as Product;
 
     if (product.sellerUid !== sellerUid) {
         throw new Error('Unauthorized');
@@ -421,12 +510,14 @@ export const updateVariant = async (
             ? {
                   ...v,
                   ...data,
+                  price: { ...v.price, ...data.price },
+                  inventory: { ...v.inventory, ...data.inventory },
                   updatedAt: new Date(),
               }
             : v
     );
 
-    await db.collection(PRODUCTS_COLLECTION).doc(productId).update({
+    await docRef.update({
         variants: updatedVariants,
         updatedAt: new Date(),
     });
@@ -434,28 +525,31 @@ export const updateVariant = async (
     return { ...product, variants: updatedVariants };
 };
 
-/**
- * 🔥 DELETE VARIANT
- */
+
 export const deleteVariant = async (
     productId: string,
     sellerUid: string,
     sku: string
 ): Promise<Product> => {
-    const product = await getProductById(productId);
-    if (!product) throw new Error('Product not found');
+
+    const docRef = db.collection(PRODUCTS_COLLECTION).doc(productId);
+    const snap = await docRef.get();
+
+    if (!snap.exists) throw new Error('Product not found');
+
+    const product = snap.data() as Product;
 
     if (product.sellerUid !== sellerUid) {
         throw new Error('Unauthorized');
     }
 
-    const updatedVariants = product.variants.filter((v) => v.sku !== sku);
+    const updatedVariants = product.variants.filter(v => v.sku !== sku);
 
     if (updatedVariants.length === 0) {
         throw new Error('At least one variant required');
     }
 
-    await db.collection(PRODUCTS_COLLECTION).doc(productId).update({
+    await docRef.update({
         variants: updatedVariants,
         updatedAt: new Date(),
     });
@@ -463,47 +557,12 @@ export const deleteVariant = async (
     return { ...product, variants: updatedVariants };
 };
 
-/**
- * 🔥 GET SINGLE VARIANT
- */
-export const getVariant = async (
-    productId: string,
-    sku: string
-): Promise<Variant | null> => {
-    const product = await getProductById(productId);
-    if (!product) return null;
-
-    return product.variants.find((v) => v.sku === sku) || null;
-};
-
-/**
- * 🔥 DELETE PRODUCT
- */
-export const deleteProduct = async (
-    productId: string,
-    sellerUid: string
-): Promise<void> => {
-    const docRef = db.collection(PRODUCTS_COLLECTION).doc(productId);
-    const existing = await docRef.get();
-
-    if (!existing.exists) throw new Error('Product not found');
-
-    const prod = existing.data() as Product;
-
-    if (prod.sellerUid !== sellerUid) {
-        throw new Error('Unauthorized');
-    }
-
-    await docRef.delete();
-};
-
-/**
- * 🔥 GET PRODUCT
- */
 export const getProductById = async (
     productId: string
 ): Promise<Product | null> => {
+
     const doc = await db.collection(PRODUCTS_COLLECTION).doc(productId).get();
+
     if (!doc.exists) return null;
 
     return { id: doc.id, ...doc.data() } as Product;
@@ -512,6 +571,7 @@ export const getProductById = async (
 export const getProductBySlug = async (
     slug: string
 ): Promise<Product | null> => {
+
     const snapshot = await db
         .collection(PRODUCTS_COLLECTION)
         .where('slug', '==', slug)
@@ -530,16 +590,17 @@ export const listPublicProducts = async (): Promise<Product[]> => {
         .where('status', '==', 'active')
         .get();
 
-    return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
 };
 
 export const listProductsBySeller = async (
     sellerUid: string
 ): Promise<Product[]> => {
+
     const snapshot = await db
         .collection(PRODUCTS_COLLECTION)
         .where('sellerUid', '==', sellerUid)
         .get();
 
-    return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
 };

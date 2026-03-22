@@ -1,16 +1,73 @@
+
+
 import { Request, Response, NextFunction } from 'express';
 import { z } from 'zod';
 
 type ValidateTarget = 'body' | 'params' | 'query';
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
+// export const validate = (schema: z.ZodTypeAny, target: ValidateTarget = 'body') => {
+//     return (req: Request, res: Response, next: NextFunction): void => {
+//         const result = schema.safeParse(req[target]);
+
+//         if (!result.success) {
+//             const rawIssues =
+//                 result.error.issues ??
+//                 (result.error as unknown as { errors: z.ZodIssue[] }).errors ??
+//                 [];
+
+//             const errors = rawIssues.map((e: z.ZodIssue) => ({
+//                 field: e.path.join('.'),
+//                 message: e.message,
+//             }));
+
+//             res.status(400).json({
+//                 success: false,
+//                 message: 'Validation failed',
+//                 errors,
+//             });
+//             return;
+//         }
+
+//         req[target] = result.data;
+//         next();
+//     };
+// };
 export const validate = (schema: z.ZodTypeAny, target: ValidateTarget = 'body') => {
     return (req: Request, res: Response, next: NextFunction): void => {
+
+        // 🔥 ADD THIS BLOCK HERE (VERY IMPORTANT)
+        const tryParseJSON = (value: any) => {
+            if (typeof value === 'string') {
+                try {
+                    return JSON.parse(value);
+                } catch {
+                    return value;
+                }
+            }
+            return value;
+        };
+
+        // 🔥 APPLY ONLY FOR BODY
+        if (target === 'body') {
+            const fieldsToParse = ['variants', 'shipping', 'attributes', 'soldInfo', 'fomo'];
+
+            for (const field of fieldsToParse) {
+                if (req.body[field]) {
+                    req.body[field] = tryParseJSON(req.body[field]);
+                }
+            }
+        }
+
+        // ✅ NOW VALIDATE (AFTER PARSE)
         const result = schema.safeParse(req[target]);
 
         if (!result.success) {
-            // Zod v4 uses .issues, Zod v3 uses .errors — support both
-            const rawIssues = result.error.issues ?? (result.error as unknown as { errors: z.ZodIssue[] }).errors ?? [];
+            const rawIssues =
+                result.error.issues ??
+                (result.error as unknown as { errors: z.ZodIssue[] }).errors ??
+                [];
+
             const errors = rawIssues.map((e: z.ZodIssue) => ({
                 field: e.path.join('.'),
                 message: e.message,
@@ -29,7 +86,7 @@ export const validate = (schema: z.ZodTypeAny, target: ValidateTarget = 'body') 
     };
 };
 
-// ─── Reusable Zod Schemas ─────────────────────────────────────────────────────
+// ─── USER SCHEMAS ─────────────────────────────────────────
 
 export const updateUserSchema = z.object({
     name: z.string().min(2, 'Name must be at least 2 characters').max(50).optional(),
@@ -50,80 +107,118 @@ export const uidParamSchema = z.object({
     uid: z.string().min(1, 'UID is required'),
 });
 
-// ─── Product/Category Validation Schemas ─────────────────────────────────────
+// ─── PRODUCT SCHEMAS (FIXED) ─────────────────────────────
 
-
-// INDUSTRY-LEVEL PRODUCT VALIDATION
+// 🔹 Common
 const attributeSchema = z.object({
     key: z.string().min(1),
-    value: z.string().min(1)
+    value: z.string().min(1),
 });
 
 const imageSchema = z.object({
     url: z.string().url(),
     publicId: z.string().min(1),
     altText: z.string().optional(),
-    order: z.number().optional()
+    order: z.number().optional(),
 });
 
+// 🔹 Price
 const priceSchema = z.object({
     base: z.number().nonnegative(),
+
     sale: z.number().nonnegative().nullable().optional(),
     costPrice: z.number().nonnegative().nullable().optional(),
+
+    // ✅ auto convert string → Date
     saleStartDate: z.coerce.date().nullable().optional(),
-    saleEndDate: z.coerce.date().nullable().optional()
+    saleEndDate: z.coerce.date().nullable().optional(),
 });
 
+// 🔹 Inventory
 const inventorySchema = z.object({
     quantity: z.number().nonnegative(),
+
     lowStockThreshold: z.number().nonnegative().optional(),
-    trackInventory: z.boolean().optional()
+    trackInventory: z.boolean().default(true),
+    allowBackorder: z.boolean().optional(),
 });
 
+// 🔹 Variant (🔥 FIXED)
 const variantSchema = z.object({
-    sku: z.string().min(1, 'SKU is required'),
-    barcode: z.number(),
-    attributes: z.array(attributeSchema),
+    // ❌ SKU removed (auto-generated in service)
+
+    // ✅ optional
+    barcode: z.string().optional(),
+
+    attributes: z.array(attributeSchema).default([]),
+
     images: z.array(imageSchema).max(5).optional(),
+
     price: priceSchema,
+
     inventory: inventorySchema,
-    isActive: z.boolean().optional()
+
+    isActive: z.boolean().optional(),
 });
 
-const shippingSchema = z.object({
-    weight: z.number().nonnegative().optional(),
-    dimensions: z.object({
-        length: z.number().nonnegative().optional(),
-        width: z.number().nonnegative().optional(),
-        height: z.number().nonnegative().optional()
-    }).optional()
-}).optional();
+// 🔹 Shipping
+const shippingSchema = z
+    .object({
+        weight: z.number().nonnegative().optional(),
+        dimensions: z
+            .object({
+                length: z.number().nonnegative().optional(),
+                width: z.number().nonnegative().optional(),
+                height: z.number().nonnegative().optional(),
+            })
+            .optional(),
+    })
+    .optional();
 
+// 🔥 CREATE PRODUCT (FINAL FIXED)
 export const createProductSchema = z.object({
     name: z.string().min(1, 'Product name is required'),
     title: z.string().min(1, 'Product title is required'),
+
     description: z.string().optional(),
     brand: z.string().optional(),
+
     status: z.enum(['draft', 'active', 'archived']).optional(),
-    category: z.string().min(1, 'Category is required'),
+
+    // ✅ FIXED (IMPORTANT)
+    categoryId: z.string().min(1, 'Category is required'),
+
     shipping: shippingSchema,
+
     attributes: z.array(attributeSchema).optional(),
-    variants: z.array(variantSchema).optional(),
-    soldInfo: z.object({
-        enabled: z.boolean().optional(),
-        count: z.number().nonnegative().optional()
-    }).optional(),
-    fomo: z.object({
-        enabled: z.boolean().optional(),
-        type: z.enum(['viewing_now', 'product_left', 'custom']).optional(),
-        viewingNow: z.number().nonnegative().optional(),
-        productLeft: z.number().nonnegative().optional(),
-        customMessage: z.string().optional()
-    }).optional(),
-    isFeatured: z.boolean().optional()
+
+    // ✅ REQUIRED
+    variants: z.array(variantSchema).min(1, 'At least one variant required'),
+
+    soldInfo: z
+        .object({
+            enabled: z.boolean().optional(),
+            count: z.number().nonnegative().optional(),
+        })
+        .optional(),
+
+    // ✅ FIXED FOMO
+    fomo: z
+        .object({
+            enabled: z.boolean().optional(),
+            type: z.enum(['viewing_now', 'product_left', 'custom']).optional(),
+            value: z.number().optional(),
+            customMessage: z.string().optional(),
+        })
+        .optional(),
+
+    isFeatured: z.boolean().optional(),
 });
 
+// 🔹 UPDATE PRODUCT
 export const updateProductSchema = createProductSchema.partial();
+
+// ─── CATEGORY ────────────────────────────────────────────
 
 export const createCategorySchema = z.object({
     name: z.string().min(1, 'Category name is required'),
