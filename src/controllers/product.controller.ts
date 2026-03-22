@@ -176,7 +176,7 @@ const deleteFromFirebase = async (publicId: string) => {
  * 🔥 Parse variants + other JSON fields (IMPORTANT FIX)
  */
 const parseBody = (data: any) => {
-    const fields = ['variants', 'shipping', 'attributes', 'soldInfo', 'fomo'];
+    const fields = ['variants', 'shipping', 'attributes', 'soldInfo', 'fomo', 'price', 'inventory'];
 
     for (const field of fields) {
         if (typeof data[field] === 'string') {
@@ -186,6 +186,14 @@ const parseBody = (data: any) => {
                 throw new Error(`Invalid JSON in ${field}`);
             }
         }
+    }
+
+    // ✅ Boolean fields manually convert karo
+    if (data.isActive !== undefined) {
+        data.isActive = data.isActive === 'true' || data.isActive === true;
+    }
+    if (data.isFeatured !== undefined) {
+        data.isFeatured = data.isFeatured === 'true' || data.isFeatured === true;
     }
 
     return data;
@@ -203,12 +211,12 @@ const attachImages = async (
 
     return Promise.all(
         variants.map(async (variant, i) => {
-            const variantFiles = files.filter(
-                (f) => f.fieldname === `variantImages_${i}`
+            // ✅ case-insensitive match karo
+            const variantFiles = files.filter((f) => 
+                f.fieldname.toLowerCase() === `variantimages_${i}`
             );
 
             let images = [];
-
             for (let j = 0; j < Math.min(variantFiles.length, 5); j++) {
                 const uploaded = await uploadToFirebase(
                     variantFiles[j],
@@ -216,7 +224,6 @@ const attachImages = async (
                     variant.sku || `temp_${i}`,
                     j
                 );
-
                 images.push({ ...uploaded, order: j });
             }
 
@@ -237,17 +244,22 @@ export const createProduct = async (req: Request, res: Response) => {
 
         let data: any = parseBody(req.body);
 
-        // slug only for image folder (actual slug backend generate karega)
-        const tempSlug = data.name.toLowerCase().replace(/\s+/g, '-');
+        // ✅ pehle product banao (actual slug yahan generate hoga)
+        const product = await productService.createProduct(req.user.uid, data);
 
-        if (data.variants) {
-            data.variants = await attachImages(req, tempSlug, data.variants);
+        // ✅ ab actual slug se images upload karo
+        const files = (req.files || []) as Express.Multer.File[];
+        if (files.length > 0) {
+            const updatedVariants = await attachImages(
+                req,
+                product.slug,        // ✅ actual slug use ho raha hai ab
+                product.variants
+            );
+            await productService.updateProduct(product.id, req.user.uid, {
+                variants: updatedVariants,
+            });
+            product.variants = updatedVariants;
         }
-
-        const product = await productService.createProduct(
-            req.user.uid,
-            data
-        );
 
         sendSuccess(res, { product }, 'Product created', 201);
     } catch (err) {
@@ -316,10 +328,16 @@ export const addVariant = async (req: Request, res: Response) => {
         const product = await productService.getProductById(id);
         if (!product) return sendError(res, 'Not found', 404);
 
-        let variant: any = parseBody(req.body);
+       let variant: any = parseBody(req.body);
 
-        const [newVariant] = await attachImages(req, product.slug, [variant]);
+const variantData: any = {};
+if (variant.attributes !== undefined) variantData.attributes = variant.attributes;
+if (variant.price !== undefined)      variantData.price = variant.price;
+if (variant.inventory !== undefined)  variantData.inventory = variant.inventory;
+if (variant.barcode !== undefined)    variantData.barcode = variant.barcode;
+if (variant.isActive !== undefined)   variantData.isActive = variant.isActive === 'true' || variant.isActive === true;
 
+const [newVariant] = await attachImages(req, product.slug, [variantData]);
         const updated = await productService.addVariant(
             id,
             req.user.uid,
@@ -347,19 +365,34 @@ export const updateVariant = async (req: Request, res: Response) => {
 
         let data: any = parseBody(req.body);
 
+        // ✅ Sirf valid variant fields lo — baaki sab ignore
+        const variantData: any = { sku };
+
+        if (data.attributes !== undefined) variantData.attributes = data.attributes;
+        if (data.price !== undefined)      variantData.price = data.price;
+        if (data.inventory !== undefined)  variantData.inventory = data.inventory;
+        if (data.barcode !== undefined)    variantData.barcode = data.barcode;
+        if (data.isActive !== undefined)   variantData.isActive = data.isActive === 'true' || data.isActive === true;
+
+        // ✅ Images attach karo
         const [updatedVariant] = await attachImages(
             req,
             product.slug,
-            [{ ...data, sku }]
+            [variantData]
         );
 
-        // 🔥 DELETE OLD IMAGES
-        const old = product.variants.find((v) => v.sku === sku);
-        if (old && updatedVariant.images?.length) {
-            for (const img of old.images || []) {
-                await deleteFromFirebase(img.publicId);
-            }
-        }
+       // 🔥 Delete old images only if new ones uploaded
+const files = (req.files || []) as Express.Multer.File[];
+const newFilesUploaded = files.some(
+    (f) => f.fieldname.toLowerCase() === 'variantimages_0'
+);
+
+const old = product.variants.find((v) => v.sku === sku);
+if (old && newFilesUploaded) {
+    for (const img of old.images || []) {
+        await deleteFromFirebase(img.publicId);
+    }
+}
 
         const updated = await productService.updateVariant(
             id,

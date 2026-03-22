@@ -307,7 +307,9 @@ const normalizeVariants = (
                 allowBackorder: v.inventory.allowBackorder ?? false,
             },
 
-            isActive: v.isActive ?? true,
+          isActive: typeof v.isActive === 'string'
+    ? v.isActive === 'true'
+    : v.isActive ?? true,
 
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -471,18 +473,20 @@ export const addVariant = async (
 
     const product = snap.data() as Product;
 
-    if (product.sellerUid !== sellerUid) {
-        throw new Error('Unauthorized');
+    if (product.sellerUid !== sellerUid) throw new Error('Unauthorized');
+
+    // ✅ Barcode uniqueness check
+    if (variant.barcode) {
+        const duplicate = product.variants.find(
+            (v) => v.barcode && v.barcode === variant.barcode
+        );
+        if (duplicate) throw new Error(`Barcode ${variant.barcode} already exists in another variant`);
     }
 
     const newVariant = normalizeVariants([variant], product.name)[0];
-
     const updatedVariants = [...product.variants, newVariant];
 
-    await docRef.update({
-        variants: updatedVariants,
-        updatedAt: new Date(),
-    });
+    await docRef.update({ variants: updatedVariants, updatedAt: new Date() });
 
     return { ...product, variants: updatedVariants };
 };
@@ -501,8 +505,14 @@ export const updateVariant = async (
 
     const product = snap.data() as Product;
 
-    if (product.sellerUid !== sellerUid) {
-        throw new Error('Unauthorized');
+    if (product.sellerUid !== sellerUid) throw new Error('Unauthorized');
+
+    // ✅ Barcode uniqueness check (apne aap ko exclude karo)
+    if (data.barcode) {
+        const duplicate = product.variants.find(
+            (v) => v.barcode === data.barcode && v.sku !== sku  // apna SKU exclude
+        );
+        if (duplicate) throw new Error(`Barcode ${data.barcode} already exists in another variant`);
     }
 
     const updatedVariants = product.variants.map((v) =>
@@ -517,10 +527,7 @@ export const updateVariant = async (
             : v
     );
 
-    await docRef.update({
-        variants: updatedVariants,
-        updatedAt: new Date(),
-    });
+    await docRef.update({ variants: updatedVariants, updatedAt: new Date() });
 
     return { ...product, variants: updatedVariants };
 };

@@ -107,6 +107,9 @@ export const uidParamSchema = z.object({
     uid: z.string().min(1, 'UID is required'),
 });
 
+export const idParamSchema = z.object({
+    id: z.string().min(1, 'Product ID is required'),
+});
 // ─── PRODUCT SCHEMAS (FIXED) ─────────────────────────────
 
 // 🔹 Common
