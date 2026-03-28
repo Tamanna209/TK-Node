@@ -5,6 +5,7 @@ import sellerRoutes from './seller.routes';
 import adminRoutes from './admin.routes';
 import productRoutes from './product.routes';
 import categoryRoutes from './category.routes';
+import chatRoutes from './chat.routes';
 
 const router = Router();
 
@@ -25,5 +26,6 @@ router.use('/sellers', sellerRoutes);
 router.use('/products', productRoutes); // public + seller managed
 router.use('/categories', categoryRoutes); // public read, admin manage
 router.use('/admin', adminRoutes);
+router.use('/chats', chatRoutes);
 
 export default router;

@@ -21,7 +21,17 @@ export const requestSellerAccount = async (req: Request, res: Response): Promise
             return;
         }
 
-        const request = await createSellerRequest(req.user.uid);
+        const { storeName, storeDescription, storeAddress } = req.body as {
+            storeName?: string;
+            storeDescription?: string;
+            storeAddress?: string;
+        };
+
+        const request = await createSellerRequest(req.user.uid, {
+            storeName,
+            storeDescription,
+            storeAddress,
+        });
         sendSuccess(res, { request }, 'Seller request submitted. Admin will review shortly.', 201);
     } catch (error) {
         const err = error as Error;

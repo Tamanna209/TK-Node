@@ -1,15 +1,21 @@
 import * as admin from 'firebase-admin';
 import { db } from '../config/firebase';
 import { SellerProfile, SellerRequest, UpdateSellerProfileDTO } from '../types/seller.types';
-import { getUserById, updateUserRole } from './user.service';
+import { getUserById } from './user.service';
+
+const USERS_COLLECTION = 'users';
 
 const SELLER_REQUESTS_COLLECTION = 'sellerRequests';
 const SELLER_PROFILES_COLLECTION = 'sellerProfiles';
 
 /**
  * Create a seller request for a user
+ * Optionally includes seller details (storeName, storeDescription, storeAddress)
  */
-export const createSellerRequest = async (uid: string): Promise<SellerRequest> => {
+export const createSellerRequest = async (
+    uid: string,
+    details?: { storeName?: string; storeDescription?: string; storeAddress?: string }
+): Promise<SellerRequest> => {
     // Check if request already exists
     const existing = await db.collection(SELLER_REQUESTS_COLLECTION).doc(uid).get();
 
@@ -24,7 +30,7 @@ export const createSellerRequest = async (uid: string): Promise<SellerRequest> =
     }
 
     const now = admin.firestore.FieldValue.serverTimestamp();
-    const requestData = {
+    const requestData: Record<string, unknown> = {
         uid,
         status: 'pending',
         requestedAt: now,
@@ -32,6 +38,11 @@ export const createSellerRequest = async (uid: string): Promise<SellerRequest> =
         reviewedBy: null,
         rejectionReason: null,
     };
+
+    // Store seller details if provided
+    if (details?.storeName) requestData.storeName = details.storeName;
+    if (details?.storeDescription) requestData.storeDescription = details.storeDescription;
+    if (details?.storeAddress) requestData.storeAddress = details.storeAddress;
 
     await db.collection(SELLER_REQUESTS_COLLECTION).doc(uid).set(requestData);
 
@@ -85,33 +96,40 @@ export const approveSellerRequest = async (
 
     // Update seller request
     const requestRef = db.collection(SELLER_REQUESTS_COLLECTION).doc(uid);
+    const requestDoc = await requestRef.get();
+    const requestData = requestDoc.data();
+
     batch.update(requestRef, {
         status: 'approved',
         reviewedAt: now,
         reviewedBy: adminUid,
     });
 
-    // Create seller profile document
+    // Create seller profile document using details from the request
     const profileRef = db.collection(SELLER_PROFILES_COLLECTION).doc(uid);
     const existingProfile = await profileRef.get();
 
     if (!existingProfile.exists) {
         batch.set(profileRef, {
             uid,
-            storeName: `${user.name || 'My'}'s Store`,
-            storeDescription: '',
+            storeName: requestData?.storeName || `${user.name || 'My'}'s Store`,
+            storeDescription: requestData?.storeDescription || '',
             storePhotoURL: null,
-            storeAddress: '',
+            storeAddress: requestData?.storeAddress || '',
             qrCodeURL: null,
             createdAt: now,
             updatedAt: now,
         });
     }
 
-    await batch.commit();
+    // Same atomic write: request + store (sellerProfiles) + user role
+    const userRef = db.collection(USERS_COLLECTION).doc(uid);
+    batch.update(userRef, {
+        role: 'seller',
+        updatedAt: now,
+    });
 
-    // Update user role to seller
-    await updateUserRole(uid, 'seller');
+    await batch.commit();
 };
 
 /**
