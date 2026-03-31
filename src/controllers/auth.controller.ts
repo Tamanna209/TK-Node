@@ -29,8 +29,12 @@ export const verifyToken = async (req: Request, res: Response): Promise<void> =>
             isNew ? 201 : 200
         );
     } catch (error) {
-        const err = error as Error;
+        const err = error as Error & { statusCode?: number };
         console.error('verifyToken error:', err.message);
+        if (err.statusCode === 409) {
+            sendError(res, err.message, 409);
+            return;
+        }
         sendError(res, 'Authentication failed', 500, err.message);
     }
 };

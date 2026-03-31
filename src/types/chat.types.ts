@@ -1,6 +1,6 @@
 import { Timestamp } from 'firebase-admin/firestore';
 
-export type MessageType = 'text' | 'image' | 'product_card' | 'order_card' | 'system';
+export type MessageType = 'text' | 'image' | 'audio' | 'document' | 'product_card' | 'order_card' | 'system';
 export type MessageStatus = 'sending' | 'sent' | 'delivered' | 'read';
 export type SenderRole = 'buyer' | 'seller' | 'admin';
 
@@ -36,6 +36,14 @@ export interface ChatMessageDocument {
     type: MessageType;
     text?: string;
     imageUrl?: string;
+    audioUrl?: string;
+    audioDurationMs?: number;
+    document?: {
+        name: string;
+        url: string;
+        mimeType: string;
+        size?: number;
+    };
     product?: {
         id: string;
         name: string;
@@ -64,6 +72,14 @@ export interface SendMessageDTO {
     type: MessageType;
     text?: string;
     imageUrl?: string;
+    audioUrl?: string;
+    audioDurationMs?: number;
+    document?: {
+        name: string;
+        url: string;
+        mimeType: string;
+        size?: number;
+    };
     product?: {
         id: string;
         name: string;

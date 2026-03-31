@@ -10,11 +10,42 @@ export const listCategories = async (): Promise<Category[]> => {
     return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Category));
 };
 
+export const searchCategories = async (query: string, limit = 20): Promise<Category[]> => {
+    const q = (query || '').trim().toLowerCase();
+    if (!q) return [];
+
+    // Prefix search on normalized field for fast suggestions.
+    const snapshot = await db
+        .collection(CATEGORIES_COLLECTION)
+        .orderBy('nameLower')
+        .startAt(q)
+        .endAt(`${q}\uf8ff`)
+        .limit(limit)
+        .get();
+
+    return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Category));
+};
+
 export const createCategory = async (data: CreateCategoryDTO): Promise<Category> => {
     const now = admin.firestore.FieldValue.serverTimestamp();
-    const slug = generateSlug(data.name);
+    const trimmedName = data.name.trim();
+    const slug = generateSlug(trimmedName);
+    const nameLower = trimmedName.toLowerCase();
+
+    // Prevent duplicates by exact lowercase name.
+    const existing = await db
+        .collection(CATEGORIES_COLLECTION)
+        .where('nameLower', '==', nameLower)
+        .limit(1)
+        .get();
+    if (!existing.empty) {
+        const doc = existing.docs[0];
+        return { id: doc.id, ...doc.data() } as Category;
+    }
+
     const docRef = await db.collection(CATEGORIES_COLLECTION).add({
-        name: data.name,
+        name: trimmedName,
+        nameLower,
         slug,
         createdAt: now,
         updatedAt: now,
@@ -36,6 +67,7 @@ export const updateCategory = async (
     const updateData: any = { ...data, updatedAt: now };
     if (data.name && data.name !== (existing.data() as Category).name) {
         updateData.slug = generateSlug(data.name);
+        updateData.nameLower = data.name.trim().toLowerCase();
     }
     await docRef.update(updateData);
     const snap = await docRef.get();

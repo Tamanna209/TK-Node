@@ -10,7 +10,15 @@ import { db } from '../config/firebase';
  */
 export const listCategories = async (_req: Request, res: Response): Promise<void> => {
     try {
-        const categories = await categoryService.listCategories();
+        const q = String(_req.query['q'] || '').trim();
+        const limitRaw = Number(_req.query['limit'] || 20);
+        const limit = Number.isFinite(limitRaw)
+            ? Math.max(1, Math.min(50, Math.floor(limitRaw)))
+            : 20;
+
+        const categories = q
+            ? await categoryService.searchCategories(q, limit)
+            : await categoryService.listCategories();
         sendSuccess(res, { categories, total: categories.length }, 'Categories fetched');
     } catch (error) {
         const err = error as Error;

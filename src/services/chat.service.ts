@@ -150,6 +150,9 @@ export const sendMessage = async (
 
     if (dto.text) messageData.text = dto.text;
     if (dto.imageUrl) messageData.imageUrl = dto.imageUrl;
+    if (dto.audioUrl) messageData.audioUrl = dto.audioUrl;
+    if (dto.audioDurationMs != null) messageData.audioDurationMs = dto.audioDurationMs;
+    if (dto.document) messageData.document = dto.document;
     if (dto.product) messageData.product = dto.product;
     if (dto.order) messageData.order = dto.order;
 
@@ -158,6 +161,8 @@ export const sendMessage = async (
     const previewText =
         dto.text ||
         (dto.type === 'image' ? '📷 Photo' : '') ||
+        (dto.type === 'audio' ? '🎤 Voice message' : '') ||
+        (dto.type === 'document' ? `📎 ${dto.document?.name || 'Document'}` : '') ||
         (dto.type === 'product_card' ? `📦 ${dto.product?.name}` : '') ||
         (dto.type === 'order_card' ? `📋 Order ${dto.order?.orderNumber}` : '') ||
         'New message';

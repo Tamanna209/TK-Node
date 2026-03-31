@@ -5,6 +5,7 @@ export type UserRole = 'buyer' | 'seller' | 'admin';
 export interface UserProfile {
     uid: string;
     phoneNumber: string;
+    phoneE164?: string;
     name: string;
     photoURL: string | null;
     role: UserRole;

@@ -1,12 +1,14 @@
 import { Router } from 'express';
 import { authenticate } from '../middlewares/auth.middleware';
-import { uploadSingle } from '../middlewares/upload.middleware';
+import { uploadSingle, uploadChatSingle } from '../middlewares/upload.middleware';
 import {
     createOrGetChatController,
     listMyChats,
     getChatDetails,
     sendMessageController,
     sendImageMessage,
+    sendAudioMessage,
+    sendDocumentMessage,
     listMessages,
     markAsReadController,
     typingIndicator,
@@ -28,6 +30,8 @@ router.post('/:chatId/messages', authenticate, sendMessageController);
 
 /** POST /api/chats/:chatId/messages/image — Send an image message */
 router.post('/:chatId/messages/image', authenticate, uploadSingle('image'), sendImageMessage);
+router.post('/:chatId/messages/audio', authenticate, uploadChatSingle('audio'), sendAudioMessage);
+router.post('/:chatId/messages/document', authenticate, uploadChatSingle('document'), sendDocumentMessage);
 
 /** GET /api/chats/:chatId/messages — Get paginated messages */
 router.get('/:chatId/messages', authenticate, listMessages);
