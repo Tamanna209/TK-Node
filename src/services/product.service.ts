@@ -238,6 +238,7 @@ const validateCategory = async (categoryId: string) => {
  */
 const getSellerSnapshot = async (sellerUid: string) => {
     const userDoc = await db.collection(USERS_COLLECTION).doc(sellerUid).get();
+    const sellerProfileDoc = await db.collection('sellerProfiles').doc(sellerUid).get();
 
     if (!userDoc.exists) {
         throw new Error('Seller not found');
@@ -257,6 +258,7 @@ const getSellerSnapshot = async (sellerUid: string) => {
 
     return {
         name: user.name ?? 'Seller',
+        storeName: (sellerProfileDoc.exists ? (sellerProfileDoc.data()?.storeName as string | undefined) : undefined) || undefined,
     };
 };
 
@@ -596,8 +598,24 @@ export const listPublicProducts = async (): Promise<Product[]> => {
         .collection(PRODUCTS_COLLECTION)
         .where('status', '==', 'active')
         .get();
+    const products = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
+    const sellerIds = Array.from(new Set(products.map((p) => p.sellerUid)));
 
-    return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
+    const sellerProfiles = await Promise.all(
+        sellerIds.map(async (uid) => {
+            const doc = await db.collection('sellerProfiles').doc(uid).get();
+            return { uid, storeName: (doc.data()?.storeName as string | undefined) || undefined };
+        })
+    );
+    const storeMap = new Map(sellerProfiles.map((x) => [x.uid, x.storeName]));
+
+    return products.map((p) => ({
+        ...p,
+        sellerSnapshot: {
+            name: p.sellerSnapshot?.name || 'Seller',
+            storeName: storeMap.get(p.sellerUid) || p.sellerSnapshot?.storeName,
+        },
+    }));
 };
 
 export const listProductsBySeller = async (

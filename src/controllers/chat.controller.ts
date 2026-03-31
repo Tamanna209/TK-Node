@@ -186,6 +186,71 @@ export const sendImageMessage = async (req: Request, res: Response): Promise<voi
     }
 };
 
+export const sendAudioMessage = async (req: Request, res: Response): Promise<void> => {
+    try {
+        if (!req.user) { sendError(res, 'Unauthorized', 401); return; }
+        const chatId = req.params['chatId'] as string;
+        const chat = await getChatById(chatId);
+        if (!chat) { sendError(res, 'Chat not found', 404); return; }
+        if (!chat.participants.includes(req.user.uid)) { sendError(res, 'Not a participant', 403); return; }
+        if (!req.file) { sendError(res, 'No audio file provided', 400); return; }
+
+        const ext = req.file.mimetype.split('/')[1] ?? 'm4a';
+        const storagePath = `chats/${chatId}/${Date.now()}.${ext}`;
+        const audioUrl = await uploadFile(req.file.buffer, req.file.mimetype, storagePath);
+
+        const user = await getUserById(req.user.uid);
+        const senderRole: SenderRole = user?.role === 'admin' ? 'admin' : user?.role === 'seller' ? 'seller' : 'buyer';
+
+        const durationMs = req.body.durationMs ? Number(req.body.durationMs) : undefined;
+        const message = await sendMessage(chatId, req.user.uid, senderRole, {
+            type: 'audio',
+            audioUrl,
+            audioDurationMs: durationMs,
+            text: '🎤 Voice message',
+        });
+        sendSuccess(res, { message, audioUrl }, 'Audio sent', 201);
+    } catch (error) {
+        const err = error as Error;
+        console.error('sendAudioMessage error:', err.message);
+        sendError(res, 'Failed to send audio', 500);
+    }
+};
+
+export const sendDocumentMessage = async (req: Request, res: Response): Promise<void> => {
+    try {
+        if (!req.user) { sendError(res, 'Unauthorized', 401); return; }
+        const chatId = req.params['chatId'] as string;
+        const chat = await getChatById(chatId);
+        if (!chat) { sendError(res, 'Chat not found', 404); return; }
+        if (!chat.participants.includes(req.user.uid)) { sendError(res, 'Not a participant', 403); return; }
+        if (!req.file) { sendError(res, 'No document file provided', 400); return; }
+
+        const ext = req.file.originalname.split('.').pop() || 'bin';
+        const storagePath = `chats/${chatId}/${Date.now()}-${req.file.originalname || 'document.' + ext}`;
+        const fileUrl = await uploadFile(req.file.buffer, req.file.mimetype, storagePath);
+
+        const user = await getUserById(req.user.uid);
+        const senderRole: SenderRole = user?.role === 'admin' ? 'admin' : user?.role === 'seller' ? 'seller' : 'buyer';
+        const message = await sendMessage(chatId, req.user.uid, senderRole, {
+            type: 'document',
+            document: {
+                name: req.file.originalname,
+                url: fileUrl,
+                mimeType: req.file.mimetype,
+                size: req.file.size,
+            },
+            text: `📎 ${req.file.originalname}`,
+        });
+
+        sendSuccess(res, { message, fileUrl }, 'Document sent', 201);
+    } catch (error) {
+        const err = error as Error;
+        console.error('sendDocumentMessage error:', err.message);
+        sendError(res, 'Failed to send document', 500);
+    }
+};
+
 /**
  * GET /api/chats/:chatId/messages
  * Get paginated messages for a chat

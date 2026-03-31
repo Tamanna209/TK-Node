@@ -103,6 +103,14 @@ export const rejectSellerSchema = z.object({
     reason: z.string().min(5, 'Rejection reason must be at least 5 characters').max(300),
 });
 
+export const createAdminSchema = z.object({
+    uid: z.string().min(1, 'UID is required'),
+});
+
+export const createAdminByPhoneSchema = z.object({
+    phoneNumber: z.string().min(7, 'Phone number is required'),
+});
+
 export const uidParamSchema = z.object({
     uid: z.string().min(1, 'UID is required'),
 });

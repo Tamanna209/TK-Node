@@ -202,6 +202,7 @@ export interface Product {
   // 🔥 OPTIONAL SNAPSHOT (PERFORMANCE)
   sellerSnapshot?: {
     name: string;
+    storeName?: string;
     rating?: number;
   };
 

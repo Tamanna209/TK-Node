@@ -63,6 +63,28 @@ const multerInstance = multer({
     fileFilter,
 });
 
+const CHAT_ALLOWED_TYPES = [
+    'image/jpeg',
+    'image/png',
+    'image/webp',
+    'audio/m4a',
+    'audio/mp4',
+    'audio/mpeg',
+    'audio/aac',
+    'application/pdf',
+    'application/msword',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'text/plain',
+];
+const chatMulter = multer({
+    storage,
+    limits: { fileSize: 20 * 1024 * 1024 },
+    fileFilter: (_req: Request, file: Express.Multer.File, cb: multer.FileFilterCallback) => {
+        if (CHAT_ALLOWED_TYPES.includes(file.mimetype)) cb(null, true);
+        else cb(new Error('Unsupported chat file type'));
+    },
+});
+
 /**
  * 🔥 Single Image Upload (profile, thumbnail)
  */
@@ -79,3 +101,8 @@ export const uploadMultiple = (field: string, maxCount: number) =>
  * 🔥 Dynamic fields (variantImages_0, variantImages_1)
  */
 export const uploadAny = () => multerInstance.any();
+
+export const uploadChatSingle = (field: string) => chatMulter.single(field);
+
+export const uploadChatMultiple = (field: string, maxCount: number) =>
+    chatMulter.array(field, maxCount);
