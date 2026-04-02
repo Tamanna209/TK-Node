@@ -240,6 +240,23 @@ export interface Product {
 
   isFeatured?: boolean;
 
+  /** Optional analytics — updated by jobs/events; used for feed + honest FOMO */
+  metrics?: {
+    views24h?: number;
+    views7d?: number;
+    sold7d?: number;
+    sold30d?: number;
+    inquiries7d?: number;
+  };
+
+  /**
+   * Denormalized for indexed feed queries (Firestore orderBy) — no extra infra.
+   * Kept in sync on create/update from metrics + seller rating.
+   */
+  feedSold7d?: number;
+  feedSold30d?: number;
+  sellerRatingForFeed?: number;
+
   createdAt: Date;
   updatedAt: Date;
 
@@ -297,6 +314,8 @@ export interface CreateProductDTO {
   };
 
   isFeatured?: boolean;
+
+  metrics?: Product["metrics"];
 }
 
 export interface UpdateProductDTO extends Partial<CreateProductDTO> {}

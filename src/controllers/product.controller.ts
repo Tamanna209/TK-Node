@@ -545,6 +545,52 @@ export const listProducts = async (_req: Request, res: Response) => {
     }
 };
 
+/** GET /api/products/feed?mode=latest|best_week|best_month|featured|top_rated&limit= */
+export const getFeed = async (req: Request, res: Response) => {
+    try {
+        const raw = (req.query.mode as string) || 'latest';
+        const allowed: productService.FeedMode[] = [
+            'latest',
+            'best_week',
+            'best_month',
+            'featured',
+            'top_rated',
+        ];
+        const mode = (allowed.includes(raw as productService.FeedMode)
+            ? raw
+            : 'latest') as productService.FeedMode;
+        const limit = Math.min(Math.max(parseInt(String(req.query.limit || '60'), 10) || 60, 1), 200);
+        const cursor = typeof req.query.cursor === 'string' ? req.query.cursor : undefined;
+        const { products, nextCursor } = await productService.listFeedProducts(mode, limit, cursor);
+        // Page 1 only; cursor pages should not be cached long at CDN (different URLs).
+        if (!cursor) {
+            res.setHeader('Cache-Control', 'public, max-age=45, stale-while-revalidate=90');
+        } else {
+            res.setHeader('Cache-Control', 'private, max-age=0');
+        }
+        sendSuccess(res, { products, mode, nextCursor });
+    } catch (err) {
+        sendError(res, (err as Error).message || 'Failed to fetch feed');
+    }
+};
+
+/** GET /api/products/seller/:sellerUid/related?exclude=&limit= */
+export const listSellerRelated = async (req: Request, res: Response) => {
+    try {
+        const sellerUid = req.params.sellerUid as string;
+        const exclude = (req.query.exclude as string) || '';
+        const limit = Math.min(Math.max(parseInt(String(req.query.limit || '8'), 10) || 8, 1), 24);
+        if (!sellerUid) {
+            sendError(res, 'sellerUid required', 400);
+            return;
+        }
+        const products = await productService.listRelatedProductsFromSeller(sellerUid, exclude, limit);
+        sendSuccess(res, { products });
+    } catch (err) {
+        sendError(res, (err as Error).message || 'Failed to fetch related products');
+    }
+};
+
 //////////////////////////////////////////////////////////////
 // 🔥 SELLER PRODUCTS
 //////////////////////////////////////////////////////////////
