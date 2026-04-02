@@ -11,6 +11,7 @@ export interface UserProfile {
     role: UserRole;
     email?: string;
     isActive: boolean;
+    expoPushTokens?: string[];
     createdAt: Timestamp;
     updatedAt: Timestamp;
 }

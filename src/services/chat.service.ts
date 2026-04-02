@@ -1,6 +1,7 @@
 import * as admin from 'firebase-admin';
 import { db } from '../config/firebase';
 import { getUserById } from './user.service';
+import { sendChatPushNotification } from './push.service';
 import {
     ChatDocument,
     ChatMessageDocument,
@@ -183,6 +184,18 @@ export const sendMessage = async (
         },
         ...unreadUpdate,
         updatedAt: now,
+    });
+
+    const recipientUids = participants.filter((p) => p !== senderUid);
+    const sender = await getUserById(senderUid);
+    const senderName = sender?.name || 'Someone';
+
+    void sendChatPushNotification({
+        recipientUids,
+        senderName,
+        chatId,
+        messagePreview: previewText,
+        messageType: dto.type,
     });
 
     const created = await msgRef.get();

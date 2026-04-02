@@ -4,6 +4,7 @@ import {
     updateUser,
     getPublicProfile,
 } from '../services/user.service';
+import { registerPushToken, unregisterPushToken } from '../services/push.service';
 import { uploadFile, extractStoragePath, deleteFile } from '../services/storage.service';
 import { sendSuccess, sendError } from '../utils/response.util';
 
@@ -119,5 +120,57 @@ export const getPublicUserProfile = async (req: Request, res: Response): Promise
         const err = error as Error;
         console.error('getPublicUserProfile error:', err.message);
         sendError(res, 'Failed to fetch profile', 500);
+    }
+};
+
+/**
+ * POST /api/users/me/push-token
+ * Register an Expo push token for the authenticated user.
+ */
+export const registerPushTokenController = async (req: Request, res: Response): Promise<void> => {
+    try {
+        if (!req.user) {
+            sendError(res, 'Unauthorized', 401);
+            return;
+        }
+
+        const { token } = req.body as { token?: string };
+        if (!token || typeof token !== 'string') {
+            sendError(res, 'Push token is required', 400);
+            return;
+        }
+
+        await registerPushToken(req.user.uid, token);
+        sendSuccess(res, null, 'Push token registered');
+    } catch (error) {
+        const err = error as Error;
+        console.error('registerPushToken error:', err.message);
+        sendError(res, err.message || 'Failed to register push token', 400);
+    }
+};
+
+/**
+ * POST /api/users/me/push-token/unregister
+ * Unregister an Expo push token (e.g. on logout).
+ */
+export const unregisterPushTokenController = async (req: Request, res: Response): Promise<void> => {
+    try {
+        if (!req.user) {
+            sendError(res, 'Unauthorized', 401);
+            return;
+        }
+
+        const { token } = req.body as { token?: string };
+        if (!token || typeof token !== 'string') {
+            sendError(res, 'Push token is required', 400);
+            return;
+        }
+
+        await unregisterPushToken(req.user.uid, token);
+        sendSuccess(res, null, 'Push token unregistered');
+    } catch (error) {
+        const err = error as Error;
+        console.error('unregisterPushToken error:', err.message);
+        sendError(res, 'Failed to unregister push token', 500);
     }
 };
