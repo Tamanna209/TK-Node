@@ -4,6 +4,8 @@ import {
     updateMyProfile,
     updateProfilePhoto,
     getPublicUserProfile,
+    registerPushTokenController,
+    unregisterPushTokenController,
 } from '../controllers/user.controller';
 import { authenticate } from '../middlewares/auth.middleware';
 import { uploadSingle } from '../middlewares/upload.middleware';
@@ -21,6 +23,12 @@ router.put('/me', authenticate, validate(updateUserSchema), updateMyProfile);
 
 /** PUT /api/users/me/photo — Upload profile photo */
 router.put('/me/photo', authenticate, uploadSingle('photo'), updateProfilePhoto);
+
+/** POST /api/users/me/push-token — Register Expo push token */
+router.post('/me/push-token', authenticate, registerPushTokenController);
+
+/** POST /api/users/me/push-token/unregister — Unregister Expo push token */
+router.post('/me/push-token/unregister', authenticate, unregisterPushTokenController);
 
 // ─── Public Routes ────────────────────────────────────────────────────────────
 

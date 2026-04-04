@@ -201,7 +201,7 @@
 //     return snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
 // };
 
-
+import type { Query } from 'firebase-admin/firestore';
 import { db } from '../config/firebase';
 import {
     Product,
@@ -256,9 +256,18 @@ const getSellerSnapshot = async (sellerUid: string) => {
         throw new Error('User is not a seller');
     }
 
+    const sp = sellerProfileDoc.exists ? sellerProfileDoc.data() : undefined;
+    const rating =
+        typeof sp?.rating === 'number'
+            ? sp.rating
+            : typeof (sp as { averageRating?: number })?.averageRating === 'number'
+              ? (sp as { averageRating: number }).averageRating
+              : undefined;
+
     return {
         name: user.name ?? 'Seller',
-        storeName: (sellerProfileDoc.exists ? (sellerProfileDoc.data()?.storeName as string | undefined) : undefined) || undefined,
+        storeName: (sp?.storeName as string | undefined) || undefined,
+        rating,
     };
 };
 
@@ -375,11 +384,17 @@ export const createProduct = async (
 
         isFeatured: data.isFeatured ?? false,
 
+        metrics: data.metrics,
+        feedSold7d: data.metrics?.sold7d ?? 0,
+        feedSold30d: data.metrics?.sold30d ?? 0,
+        sellerRatingForFeed: sellerSnapshot.rating ?? 0,
+
         createdAt: now,
         updatedAt: now,
     };
 
     await productRef.set(productData);
+    invalidateProductFeedCache();
 
     return productData;
 };
@@ -427,7 +442,22 @@ export const updateProduct = async (
         );
     }
 
+    const mergedMetrics = { ...(prod.metrics || {}), ...(data.metrics || {}) };
+    const freshSnap = await getSellerSnapshot(prod.sellerUid);
+    updateData.sellerSnapshot = {
+        name: freshSnap.name,
+        storeName: freshSnap.storeName,
+        rating: freshSnap.rating,
+    };
+    updateData.feedSold7d = mergedMetrics.sold7d ?? 0;
+    updateData.feedSold30d = mergedMetrics.sold30d ?? 0;
+    updateData.sellerRatingForFeed = freshSnap.rating ?? 0;
+    if (Object.keys(mergedMetrics).length > 0) {
+        updateData.metrics = mergedMetrics;
+    }
+
     await docRef.update(updateData);
+    invalidateProductFeedCache();
 
     const updatedSnap = await docRef.get();
 
@@ -459,6 +489,7 @@ export const deleteProduct = async (
     }
 
     await docRef.delete();
+    invalidateProductFeedCache();
 };
 
 
@@ -489,6 +520,7 @@ export const addVariant = async (
     const updatedVariants = [...product.variants, newVariant];
 
     await docRef.update({ variants: updatedVariants, updatedAt: new Date() });
+    invalidateProductFeedCache();
 
     return { ...product, variants: updatedVariants };
 };
@@ -530,6 +562,7 @@ export const updateVariant = async (
     );
 
     await docRef.update({ variants: updatedVariants, updatedAt: new Date() });
+    invalidateProductFeedCache();
 
     return { ...product, variants: updatedVariants };
 };
@@ -562,6 +595,7 @@ export const deleteVariant = async (
         variants: updatedVariants,
         updatedAt: new Date(),
     });
+    invalidateProductFeedCache();
 
     return { ...product, variants: updatedVariants };
 };
@@ -593,14 +627,9 @@ export const getProductBySlug = async (
     return { id: doc.id, ...doc.data() } as Product;
 };
 
-export const listPublicProducts = async (): Promise<Product[]> => {
-    const snapshot = await db
-        .collection(PRODUCTS_COLLECTION)
-        .where('status', '==', 'active')
-        .get();
-    const products = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
+const enrichProductsWithStoreNames = async (products: Product[]): Promise<Product[]> => {
+    if (products.length === 0) return [];
     const sellerIds = Array.from(new Set(products.map((p) => p.sellerUid)));
-
     const sellerProfiles = await Promise.all(
         sellerIds.map(async (uid) => {
             const doc = await db.collection('sellerProfiles').doc(uid).get();
@@ -608,14 +637,23 @@ export const listPublicProducts = async (): Promise<Product[]> => {
         })
     );
     const storeMap = new Map(sellerProfiles.map((x) => [x.uid, x.storeName]));
-
     return products.map((p) => ({
         ...p,
         sellerSnapshot: {
             name: p.sellerSnapshot?.name || 'Seller',
             storeName: storeMap.get(p.sellerUid) || p.sellerSnapshot?.storeName,
+            rating: p.sellerSnapshot?.rating,
         },
     }));
+};
+
+export const listPublicProducts = async (): Promise<Product[]> => {
+    const snapshot = await db
+        .collection(PRODUCTS_COLLECTION)
+        .where('status', '==', 'active')
+        .get();
+    const products = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Product));
+    return enrichProductsWithStoreNames(products);
 };
 
 export const listProductsBySeller = async (
@@ -628,4 +666,202 @@ export const listProductsBySeller = async (
         .get();
 
     return snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Product));
+};
+
+export type FeedMode =
+    | 'latest'
+    | 'best_week'
+    | 'best_month'
+    | 'featured'
+    | 'top_rated';
+
+/**
+ * In-memory feed cache (per Node process) — page 1 only.
+ * Indexed queries read at most (limit+1) docs per request.
+ */
+const feedCache = new Map<
+    string,
+    { at: number; data: { products: Product[]; nextCursor: string | null } }
+>();
+const FEED_CACHE_TTL_MS = 45_000;
+
+export const invalidateProductFeedCache = (): void => {
+    feedCache.clear();
+};
+
+const tsMs = (v: unknown): number => {
+    if (!v) return 0;
+    const any = v as { toDate?: () => Date; seconds?: number };
+    if (typeof any.toDate === 'function') return any.toDate().getTime();
+    if (typeof any.seconds === 'number') return any.seconds * 1000;
+    if (v instanceof Date) return v.getTime();
+    return new Date(v as string).getTime();
+};
+
+const FEED_MAX = 200;
+
+/** Indexed feed query — O(page) reads, not full catalog. */
+const buildFeedBaseQuery = (mode: FeedMode): Query => {
+    const col = db.collection(PRODUCTS_COLLECTION);
+    switch (mode) {
+        case 'latest':
+            return col.where('status', '==', 'active').orderBy('updatedAt', 'desc');
+        case 'featured':
+            return col
+                .where('status', '==', 'active')
+                .where('isFeatured', '==', true)
+                .orderBy('updatedAt', 'desc');
+        case 'best_week':
+            return col
+                .where('status', '==', 'active')
+                .orderBy('feedSold7d', 'desc')
+                .orderBy('updatedAt', 'desc');
+        case 'best_month':
+            return col
+                .where('status', '==', 'active')
+                .orderBy('feedSold30d', 'desc')
+                .orderBy('updatedAt', 'desc');
+        case 'top_rated':
+            return col
+                .where('status', '==', 'active')
+                .orderBy('sellerRatingForFeed', 'desc')
+                .orderBy('updatedAt', 'desc');
+        default:
+            return col.where('status', '==', 'active').orderBy('updatedAt', 'desc');
+    }
+};
+
+async function fetchFeedIndexed(
+    mode: FeedMode,
+    limit: number,
+    cursorId?: string
+): Promise<{ products: Product[]; nextCursor: string | null }> {
+    const pageSize = Math.min(limit, FEED_MAX);
+    const take = pageSize + 1;
+
+    let q: Query = buildFeedBaseQuery(mode);
+    if (cursorId) {
+        const cur = await db.collection(PRODUCTS_COLLECTION).doc(cursorId).get();
+        if (cur.exists) {
+            q = q.startAfter(cur);
+        }
+    }
+    q = q.limit(take);
+
+    const snapshot = await q.get();
+    const docs = snapshot.docs;
+    const hasMore = docs.length > pageSize;
+    const pageDocs = hasMore ? docs.slice(0, pageSize) : docs;
+    const nextCursor = hasMore && pageDocs.length > 0 ? pageDocs[pageDocs.length - 1].id : null;
+
+    const products = pageDocs.map((d) => ({ id: d.id, ...d.data() } as Product));
+    const enriched = await enrichProductsWithStoreNames(products);
+    return { products: enriched, nextCursor };
+}
+
+/** Fallback when indexes are building or legacy docs lack sort fields (run local backfill script). */
+async function listFeedProductsLegacy(mode: FeedMode, limit: number): Promise<Product[]> {
+    const products = await listPublicProducts();
+    const sellerFrequency = products.reduce<Record<string, number>>((acc, p) => {
+        acc[p.sellerUid] = (acc[p.sellerUid] || 0) + 1;
+        return acc;
+    }, {});
+
+    const ranked = [...products];
+    const soldScore = (p: Product) =>
+        (p.metrics?.sold7d ?? 0) * (mode === 'best_month' ? 0.4 : 1) +
+        (p.metrics?.sold30d ?? 0) * (mode === 'best_month' ? 0.6 : 0.3);
+
+    ranked.sort((a, b) => {
+        if (mode === 'latest') return tsMs(b.updatedAt) - tsMs(a.updatedAt);
+        if (mode === 'featured') {
+            if (!!a.isFeatured !== !!b.isFeatured) return a.isFeatured ? -1 : 1;
+            return (sellerFrequency[b.sellerUid] || 0) - (sellerFrequency[a.sellerUid] || 0);
+        }
+        if (mode === 'top_rated') {
+            const ra = a.sellerSnapshot?.rating ?? a.sellerRatingForFeed ?? 0;
+            const rb = b.sellerSnapshot?.rating ?? b.sellerRatingForFeed ?? 0;
+            if (rb !== ra) return rb - ra;
+            return soldScore(b) - soldScore(a);
+        }
+        if (mode === 'best_week' || mode === 'best_month') {
+            const sa = soldScore(a);
+            const sb = soldScore(b);
+            if (sb !== sa) return sb - sa;
+            const fa = sellerFrequency[a.sellerUid] || 1;
+            const fb = sellerFrequency[b.sellerUid] || 1;
+            return fb * 0.7 + tsMs(b.updatedAt) * 0.000000001 - (fa * 0.7 + tsMs(a.updatedAt) * 0.000000001);
+        }
+        return tsMs(b.updatedAt) - tsMs(a.updatedAt);
+    });
+
+    return ranked.slice(0, Math.min(limit, FEED_MAX));
+}
+
+export type FeedPageResult = {
+    products: Product[];
+    nextCursor: string | null;
+};
+
+/**
+ * Public feed — indexed Firestore queries + cursor pagination (low read cost).
+ * Page 1 cached ~45s. Falls back to legacy full scan if query fails (missing index / old docs).
+ */
+export const listFeedProducts = async (
+    mode: FeedMode,
+    limit = 60,
+    cursorId?: string
+): Promise<FeedPageResult> => {
+    if (!cursorId) {
+        const cacheKey = `${mode}:${limit}`;
+        const hit = feedCache.get(cacheKey);
+        if (hit && Date.now() - hit.at < FEED_CACHE_TTL_MS) {
+            return hit.data;
+        }
+    }
+
+    try {
+        const result = await fetchFeedIndexed(mode, limit, cursorId);
+        if (result.products.length === 0 && mode !== 'latest') {
+            const legacy = await listFeedProductsLegacy(mode, limit);
+            const page = { products: legacy, nextCursor: null as string | null };
+            if (!cursorId) {
+                feedCache.set(`${mode}:${limit}`, { at: Date.now(), data: page });
+            }
+            return page;
+        }
+        if (!cursorId) {
+            feedCache.set(`${mode}:${limit}`, { at: Date.now(), data: result });
+        }
+        return result;
+    } catch (e) {
+        console.warn('[feed] indexed query failed, using legacy scan:', (e as Error).message);
+        const legacy = await listFeedProductsLegacy(mode, limit);
+        return { products: legacy, nextCursor: null };
+    }
+};
+
+/**
+ * Other active products from the same seller (e.g. product detail "more from store"), newest first.
+ */
+export const listRelatedProductsFromSeller = async (
+    sellerUid: string,
+    excludeProductId: string,
+    limit = 8
+): Promise<Product[]> => {
+    const snapshot = await db
+        .collection(PRODUCTS_COLLECTION)
+        .where('sellerUid', '==', sellerUid)
+        .where('status', '==', 'active')
+        .get();
+
+    let products = snapshot.docs
+        .map((d) => ({ id: d.id, ...d.data() } as Product))
+        .filter((p) => p.id !== excludeProductId);
+
+    products.sort((a, b) => tsMs(b.updatedAt) - tsMs(a.updatedAt));
+
+    products = products.slice(0, Math.min(limit, 24));
+
+    return enrichProductsWithStoreNames(products);
 };

@@ -149,6 +149,9 @@ const router = Router();
 
 router.get('/', productController.listProducts);
 
+/** Feed ranking (public) — must be before /:id */
+router.get('/feed', productController.getFeed);
+
 // ─────────────────────────────────────────
 // 🔥 SELLER ROUTES
 // ⚠️ /seller/me MUST be before /:id
@@ -159,6 +162,12 @@ router.get(
     authenticate,
     requireApprovedSeller,
     productController.listMyProducts
+);
+
+/** Same-seller related products (public) */
+router.get(
+    '/seller/:sellerUid/related',
+    productController.listSellerRelated
 );
 
 // ─────────────────────────────────────────
