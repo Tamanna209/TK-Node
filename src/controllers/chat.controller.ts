@@ -13,6 +13,8 @@ import { getUserById } from '../services/user.service';
 import { uploadFile } from '../services/storage.service';
 import { sendSuccess, sendError } from '../utils/response.util';
 import { SenderRole, SendMessageDTO } from '../types/chat.types';
+import { getProductById } from '../services/product.service';
+import { trackEvent } from '../modules/analytics/analytics.service';
 
 /**
  * POST /api/chats
@@ -22,10 +24,11 @@ export const createOrGetChatController = async (req: Request, res: Response): Pr
     try {
         if (!req.user) { sendError(res, 'Unauthorized', 401); return; }
 
-        const { sellerUid, linkedOrderId, linkedRequestId } = req.body as {
+        const { sellerUid, linkedOrderId, linkedRequestId, productId } = req.body as {
             sellerUid: string;
             linkedOrderId?: string;
             linkedRequestId?: string;
+            productId?: string;
         };
 
         if (!sellerUid) {
@@ -44,6 +47,26 @@ export const createOrGetChatController = async (req: Request, res: Response): Pr
             linkedOrderId,
             linkedRequestId,
         });
+
+        if (productId) {
+            const prod = await getProductById(productId);
+            if (prod && prod.sellerUid === sellerUid && req.user.uid !== sellerUid) {
+                void trackEvent({
+                    sellerId: sellerUid,
+                    productId,
+                    buyerId: req.user.uid,
+                    eventType: 'contact_clicked',
+                });
+            }
+        }
+        if (isNew && req.user.uid !== sellerUid) {
+            void trackEvent({
+                sellerId: sellerUid,
+                productId: productId || '',
+                buyerId: req.user.uid,
+                eventType: 'chat_started',
+            });
+        }
 
         sendSuccess(res, { chat, isNew }, isNew ? 'Chat created' : 'Existing chat found', isNew ? 201 : 200);
     } catch (error) {

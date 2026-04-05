@@ -66,6 +66,8 @@ export interface CreateChatDTO {
     sellerUid: string;
     linkedOrderId?: string;
     linkedRequestId?: string;
+    /** When set, analytics records contact_clicked (and ties chat_started to this product). */
+    productId?: string;
 }
 
 export interface SendMessageDTO {

@@ -136,6 +136,7 @@ import { Request, Response } from 'express';
 import * as productService from '../services/product.service';
 import { sendSuccess, sendError } from '../utils/response.util';
 import { bucket } from '../config/firebase';
+import { trackEvent } from '../modules/analytics/analytics.service';
 
 /**
  * 🔥 Upload Image
@@ -525,6 +526,16 @@ export const getProduct = async (req: Request, res: Response) => {
 
         if (product.status !== 'active' && product.sellerUid !== req.user?.uid) {
             return sendError(res, 'Not found', 404);
+        }
+
+        const viewerUid = req.user?.uid;
+        if (product.status === 'active' && viewerUid !== product.sellerUid) {
+            void trackEvent({
+                sellerId: product.sellerUid,
+                productId: product.id,
+                buyerId: viewerUid || 'anonymous',
+                eventType: 'product_viewed',
+            });
         }
 
         sendSuccess(res, { product });
